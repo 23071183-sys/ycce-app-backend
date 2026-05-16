@@ -81,7 +81,8 @@ UNIQUE(assignment_id, student_id)
 await client.query(`
 CREATE TABLE IF NOT EXISTS timetable (
 id SERIAL PRIMARY KEY,
-subject_id INT REFERENCES subjects(id) NOT NULL,
+subject_id INT REFERENCES subjects(id),
+custom_subject_name VARCHAR(255),
 year INT NOT NULL,
 day VARCHAR(20) NOT NULL,
 start_time TIME NOT NULL,
