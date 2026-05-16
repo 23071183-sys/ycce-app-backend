@@ -50,6 +50,7 @@ const pool = require('./config/database');
     await client.query(`
       ALTER TABLE timetable ADD COLUMN IF NOT EXISTS custom_subject_name VARCHAR(255);
       ALTER TABLE users ADD COLUMN IF NOT EXISTS status VARCHAR(20) DEFAULT 'pending';
+      ALTER TABLE users ADD COLUMN IF NOT EXISTS can_post_general BOOLEAN DEFAULT false;
     `);
     await client.query(`UPDATE users SET status = 'approved' WHERE status IS NULL`);
   } catch (e) {

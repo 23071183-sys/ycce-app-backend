@@ -60,7 +60,7 @@ exports.getAllSGPA = async (req, res) => {
 exports.getFaculty = async (req, res) => {
   try {
     const result = await pool.query(
-      `SELECT id, name, email, role FROM users WHERE role='professor' ORDER BY name`
+      `SELECT id, name, email, role, can_post_general FROM users WHERE role IN ('professor','admin') ORDER BY role, name`
     );
     res.json(result.rows);
   } catch (err) {

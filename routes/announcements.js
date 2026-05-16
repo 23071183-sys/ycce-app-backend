@@ -26,8 +26,13 @@ const staffCanPost = async (req, res, next) => {
     if (rows.length === 0)
       return res.status(403).json({ error: 'You can only post announcements for your own subjects' });
   }
-  if (req.body.type === 'general' && !['super_admin', 'admin'].includes(role))
-    return res.status(403).json({ error: 'Only admin can post general announcements' });
+  if (req.body.type === 'general' && !['super_admin', 'admin'].includes(role)) {
+    // Check if this user was explicitly granted permission
+    const pool = require('../config/database');
+    const { rows } = await pool.query('SELECT can_post_general FROM users WHERE id = $1', [userId]);
+    if (!rows[0]?.can_post_general)
+      return res.status(403).json({ error: 'You do not have permission to post general announcements' });
+  }
   next();
 };
 
