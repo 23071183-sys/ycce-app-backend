@@ -779,6 +779,54 @@ async function runAgentLoop(system, tools, initialMessages, executeTool) {
   return response.content.find(b => b.type === 'text')?.text || 'Done.';
 }
 
+// ─── Dashboard tools (read-only data, no files, no DB writes) ─────────────────
+const DASHBOARD_TOOLS = [
+  ADMIN_TOOLS.find(t => t.name === 'get_professors'),
+  ADMIN_TOOLS.find(t => t.name === 'get_students'),
+  ADMIN_TOOLS.find(t => t.name === 'get_attendance_report'),
+  ADMIN_TOOLS.find(t => t.name === 'get_subject_attendance_summary'),
+  ADMIN_TOOLS.find(t => t.name === 'get_assignment_stats'),
+  ADMIN_TOOLS.find(t => t.name === 'get_announcements'),
+  ADMIN_TOOLS.find(t => t.name === 'get_notes'),
+  ADMIN_TOOLS.find(t => t.name === 'get_all_users'),
+  ADMIN_TOOLS.find(t => t.name === 'get_db_tables'),
+].filter(Boolean);
+
+const DASHBOARD_SYSTEM = `You are a helpful assistant for the YCCE (Yashwantrao Chavan College of Engineering) admin portal. You help professors and admins view college data.
+
+You have read-only access to live college data — professors, students, attendance, assignments, announcements, and notes.
+
+RULES:
+- Only fetch and display data. Never suggest modifications.
+- You cannot read or write files, run raw SQL, or make changes to any data.
+- Keep responses concise and well-formatted. Use tables or bullet lists for data.
+- For questions unrelated to YCCE college data, politely redirect.`;
+
+exports.dashboardChat = async (req, res) => {
+  const { messages } = req.body;
+  if (!messages || !Array.isArray(messages)) {
+    return res.status(400).json({ error: 'messages array required' });
+  }
+
+  const callerRole = req.user.role;
+  if (!['super_admin', 'admin', 'professor'].includes(callerRole)) {
+    return res.status(403).json({ error: 'Access denied' });
+  }
+
+  try {
+    const reply = await runAgentLoop(DASHBOARD_SYSTEM, DASHBOARD_TOOLS, messages, async (name, input) => {
+      // Only allow read-only admin tools — hard block anything not in DASHBOARD_TOOLS
+      const allowed = DASHBOARD_TOOLS.map(t => t.name);
+      if (!allowed.includes(name)) return { error: 'This action is not permitted in the dashboard chat.' };
+      return await executeAdminTool(name, input, 'admin');
+    });
+    res.json({ reply });
+  } catch (e) {
+    console.error('Dashboard chat error:', e.message);
+    res.status(500).json({ error: 'AI service unavailable' });
+  }
+};
+
 // ─── Student / Professor chat (no file access) ─────────────────────────────────
 exports.chat = async (req, res) => {
   const { messages } = req.body;
