@@ -19,7 +19,7 @@ try {
 const result = await pool.query(
 `SELECT a.*, u.name as posted_by_name
 FROM announcements a
-JOIN users u ON a.posted_by = u.id
+LEFT JOIN users u ON a.posted_by = u.id
 WHERE a.type = 'general'
 ORDER BY a.created_at DESC`
 );
@@ -35,7 +35,7 @@ try {
 const result = await pool.query(
 `SELECT a.*, u.name as posted_by_name
 FROM announcements a
-JOIN users u ON a.posted_by = u.id
+LEFT JOIN users u ON a.posted_by = u.id
 WHERE a.type = 'year_specific' AND a.year = $1
 ORDER BY a.created_at DESC`,
 [year]
@@ -52,7 +52,7 @@ try {
 const result = await pool.query(
 `SELECT a.*, u.name as posted_by_name
 FROM announcements a
-JOIN users u ON a.posted_by = u.id
+LEFT JOIN users u ON a.posted_by = u.id
 WHERE a.type = 'subject_specific' AND a.subject_id = $1
 ORDER BY a.created_at DESC`,
 [subjectId]
