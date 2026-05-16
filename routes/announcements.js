@@ -26,8 +26,8 @@ const staffCanPost = async (req, res, next) => {
     if (rows.length === 0)
       return res.status(403).json({ error: 'You can only post announcements for your own subjects' });
   }
-  if (req.body.type === 'general' && role !== 'super_admin')
-    return res.status(403).json({ error: 'Only super admin can post general announcements' });
+  if (req.body.type === 'general' && !['super_admin', 'admin'].includes(role))
+    return res.status(403).json({ error: 'Only admin can post general announcements' });
   next();
 };
 
