@@ -9,12 +9,24 @@ const superAdminOnly = (req, res, next) => {
   next();
 };
 
-// Staff can post, but only super_admin can post 'general' type
-const staffCanPost = (req, res, next) => {
+// Professors can only post subject_specific; admins/super_admin can post any type
+const staffCanPost = async (req, res, next) => {
+  const { role, userId } = req.user;
   const allowed = ['super_admin', 'admin', 'professor'];
-  if (!allowed.includes(req.user.role))
+  if (!allowed.includes(role))
     return res.status(403).json({ error: 'Staff access required' });
-  if (req.body.type === 'general' && req.user.role !== 'super_admin')
+  if (role === 'professor') {
+    if (req.body.type !== 'subject_specific')
+      return res.status(403).json({ error: 'Professors can only post subject-specific announcements' });
+    if (!req.body.subject_id)
+      return res.status(400).json({ error: 'subject_id is required for subject-specific announcements' });
+    // Ensure professor teaches that subject
+    const pool = require('../config/database');
+    const { rows } = await pool.query('SELECT id FROM subjects WHERE id = $1 AND professor_id = $2', [req.body.subject_id, userId]);
+    if (rows.length === 0)
+      return res.status(403).json({ error: 'You can only post announcements for your own subjects' });
+  }
+  if (req.body.type === 'general' && role !== 'super_admin')
     return res.status(403).json({ error: 'Only super admin can post general announcements' });
   next();
 };
