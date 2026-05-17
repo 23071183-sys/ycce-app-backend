@@ -823,6 +823,7 @@ exports.dashboardChat = async (req, res) => {
     res.json({ reply });
   } catch (e) {
     console.error('Dashboard chat error:', e.message);
+    if (e.message?.includes('credit balance')) return res.status(503).json({ error: 'AI service is temporarily unavailable. Credits depleted.' });
     res.status(500).json({ error: 'AI service unavailable' });
   }
 };
@@ -856,6 +857,7 @@ exports.chat = async (req, res) => {
     res.json({ reply, pdf_url: pdfUrl });
   } catch (e) {
     console.error('Chat error:', e.message);
+    if (e.message?.includes('credit balance')) return res.status(503).json({ error: 'AI service is temporarily unavailable. Credits depleted.' });
     res.status(500).json({ error: 'AI service unavailable' });
   }
 };
@@ -881,6 +883,7 @@ exports.adminChat = async (req, res) => {
     res.json({ reply });
   } catch (e) {
     console.error('Admin chat error:', e.message);
+    if (e.message?.includes('credit balance')) return res.status(503).json({ error: 'AI service is temporarily unavailable. Credits depleted.' });
     res.status(500).json({ error: 'AI service unavailable' });
   }
 };
