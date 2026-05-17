@@ -1,18 +1,9 @@
-const nodemailer = require('nodemailer');
-
-const transporter = nodemailer.createTransport({
-  host: 'smtp.gmail.com',
-  port: 587,
-  secure: false,
-  auth: {
-    user: process.env.EMAIL_USER,
-    pass: process.env.EMAIL_PASS,
-  },
-});
+const { Resend } = require('resend');
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 exports.sendOTP = async (toEmail, otp, name) => {
-  await transporter.sendMail({
-    from: `"YCCE CT App" <${process.env.EMAIL_USER}>`,
+  await resend.emails.send({
+    from: 'YCCE CT App <onboarding@resend.dev>',
     to: toEmail,
     subject: 'Your YCCE CT App OTP',
     html: `
