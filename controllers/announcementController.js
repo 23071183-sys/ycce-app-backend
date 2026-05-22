@@ -62,6 +62,21 @@ res.json(result.rows);
 res.status(500).json({ error: err.message });
 }
 };
+// Get all announcements (admin/staff use)
+exports.getAll = async (req, res) => {
+try {
+const result = await pool.query(
+`SELECT a.*, u.name as posted_by_name, s.name as subject_name
+FROM announcements a
+LEFT JOIN users u ON a.posted_by = u.id
+LEFT JOIN subjects s ON a.subject_id = s.id
+ORDER BY a.created_at DESC`
+);
+res.json(result.rows);
+} catch (err) {
+res.status(500).json({ error: err.message });
+}
+};
 // Delete announcement
 exports.delete = async (req, res) => {
 const { id } = req.params;

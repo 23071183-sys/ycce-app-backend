@@ -1,6 +1,6 @@
 const express = require('express');
 const router = express.Router();
-const { create, getGeneral, getByYear, getBySubject, delete: deleteAnnouncement } = require('../controllers/announcementController');
+const { create, getGeneral, getByYear, getBySubject, getAll, delete: deleteAnnouncement } = require('../controllers/announcementController');
 const authMiddleware = require('../middleware/auth');
 
 const superAdminOnly = (req, res, next) => {
@@ -36,6 +36,7 @@ const staffCanPost = async (req, res, next) => {
   next();
 };
 
+router.get('/all',               authMiddleware, getAll);
 router.get('/general',           getGeneral);
 router.get('/year/:year',        getByYear);
 router.get('/subject/:subjectId', getBySubject);
