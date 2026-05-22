@@ -1,7 +1,11 @@
 const { Resend } = require('resend');
-const resend = new Resend(process.env.RESEND_API_KEY);
 
 exports.sendOTP = async (toEmail, otp, name) => {
+  if (!process.env.RESEND_API_KEY) {
+    console.warn('[mailer] RESEND_API_KEY not set — OTP email skipped. OTP:', otp);
+    return;
+  }
+  const resend = new Resend(process.env.RESEND_API_KEY);
   await resend.emails.send({
     from: 'YCCE CT App <onboarding@resend.dev>',
     to: toEmail,
