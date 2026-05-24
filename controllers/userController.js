@@ -86,7 +86,7 @@ exports.getFaculty = async (req, res) => {
        LEFT JOIN subjects s ON s.professor_id = u.id
        WHERE u.role = 'professor' AND u.sort_order IS NOT NULL
        GROUP BY u.id
-       ORDER BY u.sort_order ASC`
+       ORDER BY u.sort_order ASC LIMIT 30`
     );
     res.json(result.rows);
   } catch (err) {

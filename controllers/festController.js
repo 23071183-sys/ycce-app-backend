@@ -3,7 +3,7 @@ const pool = require('../config/database');
 exports.getEvents = async (req, res) => {
 try {
 const result = await pool.query(
-'SELECT * FROM fest_events WHERE is_active=true ORDER BY event_date ASC'
+'SELECT id, title, description, event_date, venue, category FROM fest_events WHERE is_active=true ORDER BY event_date ASC LIMIT 10'
 );
 res.json(result.rows);
 } catch (err) {
@@ -28,11 +28,11 @@ res.status(500).json({ error: err.message });
 exports.getAnnouncements = async (req, res) => {
 try {
 const result = await pool.query(
-`SELECT fa.*, u.name as posted_by_name
+`SELECT fa.id, fa.title, fa.content, fa.created_at, u.name as posted_by_name
 FROM fest_announcements fa
 LEFT JOIN users u ON fa.posted_by = u.id
 WHERE fa.fest_type = 'yash'
-ORDER BY fa.created_at DESC`
+ORDER BY fa.created_at DESC LIMIT 10`
 );
 res.json(result.rows);
 } catch (err) {
