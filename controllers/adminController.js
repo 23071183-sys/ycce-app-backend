@@ -4,7 +4,7 @@ exports.getPendingUsers = async (req, res) => {
   try {
     const result = await pool.query(
       `SELECT id, name, email, year, roll_number, created_at
-       FROM users WHERE status = 'pending' ORDER BY created_at DESC`
+       FROM users WHERE status = 'pending' ORDER BY created_at DESC LIMIT 5`
     );
     res.json(result.rows);
   } catch (err) {

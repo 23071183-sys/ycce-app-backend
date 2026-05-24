@@ -21,7 +21,7 @@ const result = await pool.query(
 FROM announcements a
 LEFT JOIN users u ON a.posted_by = u.id
 WHERE a.type = 'general'
-ORDER BY a.created_at DESC`
+ORDER BY a.created_at DESC LIMIT 10`
 );
 res.json(result.rows);
 } catch (err) {

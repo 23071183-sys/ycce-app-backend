@@ -44,16 +44,3 @@ router.post('/',                 authMiddleware, staffCanPost, create);
 router.delete('/:id',            authMiddleware, superAdminOnly, deleteAnnouncement);
 
 module.exports = router;
-// Get general announcements (for mobile app)
-router.get('/general', async (req, res) => {
-  try {
-    const result = await pool.query(
-      `SELECT a.*, u.name as posted_by_name FROM announcements a
-       LEFT JOIN users u ON a.posted_by = u.id
-       WHERE a.type = 'general' ORDER BY a.created_at DESC LIMIT 10`
-    );
-    res.json(result.rows);
-  } catch (err) {
-    res.status(500).json({ error: err.message });
-  }
-});

@@ -3,8 +3,8 @@ const pool = require('../config/database');
 exports.getCommittee = async (req, res) => {
 try {
 const result = await pool.query(
-`SELECT * FROM compufest_committee
-ORDER BY is_faculty_coordinator DESC, hierarchy_order ASC`
+`SELECT id, name, position, photo_url, contact FROM compufest_committee
+ORDER BY is_faculty_coordinator DESC, hierarchy_order ASC LIMIT 20`
 );
 res.json(result.rows);
 } catch (err) {
@@ -47,7 +47,7 @@ res.status(500).json({ error: err.message });
 exports.getEvents = async (req, res) => {
 try {
 const result = await pool.query(
-'SELECT * FROM compufest_events WHERE is_active=true ORDER BY event_date ASC'
+'SELECT id, title, description, event_date, venue, banner_url FROM compufest_events WHERE is_active=true ORDER BY event_date ASC LIMIT 10'
 );
 res.json(result.rows);
 } catch (err) {
