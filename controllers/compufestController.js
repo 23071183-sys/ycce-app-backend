@@ -37,6 +37,7 @@ SET name=$1, position=$2, hierarchy_order=$3, linkedin_url=$4, photo_url=$5, con
 WHERE id=$7 RETURNING *`,
 [name, position, hierarchy_order, linkedin_url, photo_url, contact, id]
 );
+if (result.rows.length === 0) return res.status(404).json({ error: 'Committee member not found' });
 res.json(result.rows[0]);
 } catch (err) {
 res.status(500).json({ error: err.message });

@@ -156,7 +156,8 @@ exports.getAttendanceSummary = async (req, res) => {
 exports.approveUser = async (req, res) => {
   const { id } = req.params;
   try {
-    await pool.query(`UPDATE users SET status = 'approved' WHERE id = $1`, [id]);
+    const result = await pool.query(`UPDATE users SET status = 'approved' WHERE id = $1`, [id]);
+    if (result.rowCount === 0) return res.status(404).json({ error: 'User not found' });
     res.json({ message: 'User approved' });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -166,7 +167,8 @@ exports.approveUser = async (req, res) => {
 exports.rejectUser = async (req, res) => {
   const { id } = req.params;
   try {
-    await pool.query(`UPDATE users SET status = 'rejected' WHERE id = $1`, [id]);
+    const result = await pool.query(`UPDATE users SET status = 'rejected' WHERE id = $1`, [id]);
+    if (result.rowCount === 0) return res.status(404).json({ error: 'User not found' });
     res.json({ message: 'User rejected' });
   } catch (err) {
     res.status(500).json({ error: err.message });

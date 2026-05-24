@@ -26,7 +26,8 @@ exports.create = async (req, res) => {
 
   try {
     const userResult = await pool.query('SELECT role FROM users WHERE id = $1', [req.user.userId]);
-    const role = userResult.rows[0]?.role;
+    if (userResult.rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    const role = userResult.rows[0].role;
 
     const result = await pool.query(
       `INSERT INTO notes (title, content, file_url, file_name, subject_id, posted_by, unit, uploaded_by_role)
@@ -42,7 +43,8 @@ exports.create = async (req, res) => {
 exports.delete = async (req, res) => {
   const { id } = req.params;
   try {
-    await pool.query('DELETE FROM notes WHERE id = $1 AND posted_by = $2', [id, req.user.userId]);
+    const result = await pool.query('DELETE FROM notes WHERE id = $1 AND posted_by = $2', [id, req.user.userId]);
+    if (result.rowCount === 0) return res.status(404).json({ error: 'Note not found or unauthorized' });
     res.json({ message: 'Note deleted' });
   } catch (err) {
     res.status(500).json({ error: err.message });

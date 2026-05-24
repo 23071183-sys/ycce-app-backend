@@ -2,6 +2,9 @@ const pool = require('../config/database');
 // Mark attendance for a student
 exports.mark = async (req, res) => {
 const { student_id, subject_id, date, status } = req.body;
+if (!student_id || !subject_id || !date || !status) {
+return res.status(400).json({ error: 'student_id, subject_id, date, and status are required' });
+}
 try {
 const result = await pool.query(
 `INSERT INTO attendance (student_id, subject_id, date, status, marked_by)
@@ -20,6 +23,9 @@ res.status(500).json({ error: err.message });
 exports.markBulk = async (req, res) => {
 const { subject_id, date, records } = req.body;
 // records: [{ student_id, status }]
+if (!subject_id || !date || !records || !Array.isArray(records) || records.length === 0) {
+return res.status(400).json({ error: 'subject_id, date, and records array are required' });
+}
 try {
 const queries = records.map(r =>
 pool.query(
