@@ -41,6 +41,9 @@ exports.getCGPA = async (req, res) => {
 // Add or update SGPA for a semester (professor/admin)
 exports.upsertSGPA = async (req, res) => {
   const { student_id, semester, sgpa, academic_year } = req.body;
+  if (!student_id || !semester || sgpa === null || sgpa === undefined) {
+    return res.status(400).json({ error: 'student_id, semester, and sgpa are required' });
+  }
   try {
     const r = await pool.query(
       `INSERT INTO semester_gpa (student_id, semester, sgpa, academic_year)
@@ -58,6 +61,9 @@ exports.upsertSGPA = async (req, res) => {
 // Add or update a result (professor/admin)
 exports.upsertResult = async (req, res) => {
   const { student_id, subject_id, semester, internal_marks, external_marks, grade, result, academic_year } = req.body;
+  if (!student_id || !subject_id || !semester) {
+    return res.status(400).json({ error: 'student_id, subject_id, and semester are required' });
+  }
   const total = (parseFloat(internal_marks || 0) + parseFloat(external_marks || 0)).toFixed(2);
   try {
     const r = await pool.query(

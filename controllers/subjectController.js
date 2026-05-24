@@ -60,6 +60,7 @@ const result = await pool.query(
 WHERE id=$6 RETURNING *`,
 [name, code, year, semester, professor_id, id]
 );
+if (result.rows.length === 0) return res.status(404).json({ error: 'Subject not found' });
 res.json(result.rows[0]);
 } catch (err) {
 res.status(500).json({ error: err.message });
@@ -69,7 +70,8 @@ res.status(500).json({ error: err.message });
 exports.delete = async (req, res) => {
 const { id } = req.params;
 try {
-await pool.query('DELETE FROM subjects WHERE id = $1', [id]);
+const result = await pool.query('DELETE FROM subjects WHERE id = $1', [id]);
+if (result.rowCount === 0) return res.status(404).json({ error: 'Subject not found' });
 res.json({ message: 'Subject deleted' });
 } catch (err) {
 res.status(500).json({ error: err.message });
