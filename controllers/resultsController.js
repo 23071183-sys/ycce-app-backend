@@ -1,13 +1,24 @@
 const pool = require('../config/database');
 
-const MAX_TOTAL = 100;
+// A paper is marked in four parts. MSE1, MSE2 and TA make up the internal 50;
+// ESE is the external 50.
+const COMPONENTS = [
+  { key: 'mse1_marks', label: 'MSE 1', max: 15 },
+  { key: 'mse2_marks', label: 'MSE 2', max: 15 },
+  { key: 'ta_marks',   label: 'TA',    max: 20 },
+  { key: 'ese_marks',  label: 'ESE',   max: 50 },
+];
+const INTERNAL_KEYS = ['mse1_marks', 'mse2_marks', 'ta_marks'];
+const MAX_TOTAL = COMPONENTS.reduce((sum, c) => sum + c.max, 0);
 
-// Reject anything that isn't a mark between 0 and the paper total. Returns the
-// parsed number, or null for a blank, which means "not entered yet".
-const parseMark = (value) => {
+exports.COMPONENTS = COMPONENTS;
+
+// Reject anything that isn't a mark between 0 and that component's ceiling.
+// Returns the parsed number, or null for a blank, which means "not entered yet".
+const parseMark = (value, max) => {
   if (value === null || value === undefined || value === '') return null;
   const n = Number(value);
-  if (!Number.isFinite(n) || n < 0 || n > MAX_TOTAL) return undefined;
+  if (!Number.isFinite(n) || n < 0 || n > max) return undefined;
   return n;
 };
 
@@ -23,6 +34,7 @@ exports.getMarksSheet = async (req, res) => {
 
     const students = await pool.query(
       `SELECT u.id AS student_id, u.name AS student_name, u.roll_number,
+              r.mse1_marks, r.mse2_marks, r.ta_marks, r.ese_marks,
               r.internal_marks, r.external_marks, r.total_marks, r.grade, r.result
        FROM users u
        LEFT JOIN results r
@@ -31,7 +43,13 @@ exports.getMarksSheet = async (req, res) => {
        ORDER BY u.roll_number`,
       [subjectId, semester, subject.rows[0].year]
     );
-    res.json({ subject: subject.rows[0], semester: Number(semester), students: students.rows });
+    res.json({
+      subject: subject.rows[0],
+      semester: Number(semester),
+      components: COMPONENTS,
+      max_total: MAX_TOTAL,
+      students: students.rows,
+    });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -47,17 +65,31 @@ exports.upsertBulk = async (req, res) => {
 
   const rows = [];
   for (const rec of records) {
-    const internal = parseMark(rec.internal_marks);
-    const external = parseMark(rec.external_marks);
-    if (internal === undefined || external === undefined) {
-      return res.status(400).json({ error: `Marks for ${rec.roll_number || rec.student_id} must be between 0 and ${MAX_TOTAL}` });
+    const who = rec.roll_number || rec.student_id;
+    const marks = {};
+    for (const comp of COMPONENTS) {
+      const value = parseMark(rec[comp.key], comp.max);
+      if (value === undefined) {
+        return res.status(400).json({ error: `${comp.label} for ${who} must be between 0 and ${comp.max}` });
+      }
+      marks[comp.key] = value;
     }
-    if (internal === null && external === null) continue; // left blank; nothing to record
-    const total = (internal || 0) + (external || 0);
-    if (total > MAX_TOTAL) {
-      return res.status(400).json({ error: `Total for ${rec.roll_number || rec.student_id} exceeds ${MAX_TOTAL}` });
-    }
-    rows.push({ student_id: rec.student_id, internal, external, total, grade: rec.grade || null, result: rec.result || (total >= 40 ? 'Pass' : 'Fail') });
+    // A row where every component is blank has not been marked yet; skip it
+    // rather than storing a spurious zero.
+    if (COMPONENTS.every(c => marks[c.key] === null)) continue;
+
+    const internal = INTERNAL_KEYS.reduce((sum, k) => sum + (marks[k] || 0), 0);
+    const external = marks.ese_marks || 0;
+    const total = internal + external;
+    rows.push({
+      student_id: rec.student_id,
+      ...marks,
+      internal,
+      external,
+      total,
+      grade: rec.grade || null,
+      result: rec.result || (total >= 40 ? 'Pass' : 'Fail'),
+    });
   }
 
   const client = await pool.connect();
@@ -65,11 +97,15 @@ exports.upsertBulk = async (req, res) => {
     await client.query('BEGIN');
     for (const r of rows) {
       await client.query(
-        `INSERT INTO results (student_id, subject_id, semester, internal_marks, external_marks, total_marks, grade, result, academic_year)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+        `INSERT INTO results (student_id, subject_id, semester, mse1_marks, mse2_marks, ta_marks, ese_marks,
+                              internal_marks, external_marks, total_marks, grade, result, academic_year)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
          ON CONFLICT (student_id, subject_id, semester)
-         DO UPDATE SET internal_marks=$4, external_marks=$5, total_marks=$6, grade=$7, result=$8, academic_year=$9`,
-        [r.student_id, subject_id, semester, r.internal, r.external, r.total, r.grade, r.result, academic_year || null]
+         DO UPDATE SET mse1_marks=$4, mse2_marks=$5, ta_marks=$6, ese_marks=$7,
+                       internal_marks=$8, external_marks=$9, total_marks=$10,
+                       grade=$11, result=$12, academic_year=$13`,
+        [r.student_id, subject_id, semester, r.mse1_marks, r.mse2_marks, r.ta_marks, r.ese_marks,
+         r.internal, r.external, r.total, r.grade, r.result, academic_year || null]
       );
     }
     await client.query('COMMIT');
