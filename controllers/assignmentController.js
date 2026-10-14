@@ -48,7 +48,21 @@ exports.submit = async (req, res) => {
 const { assignment_id, content } = req.body;
 const file_url = req.file ? req.file.path : (req.body.file_url || null);
 const file_name = req.file ? req.file.originalname : null;
+if (!assignment_id) {
+return res.status(400).json({ error: 'assignment_id is required' });
+}
 try {
+// The app hides the submit control once the due date passes, but that is only
+// a convenience: the deadline has to hold here too, or a late submission can
+// be posted straight to the API.
+const assignment = await pool.query('SELECT due_date FROM assignments WHERE id = $1', [assignment_id]);
+if (assignment.rows.length === 0) {
+return res.status(404).json({ error: 'Assignment not found' });
+}
+const dueDate = assignment.rows[0].due_date;
+if (dueDate && new Date(dueDate) < new Date()) {
+return res.status(403).json({ error: 'The due date for this assignment has passed' });
+}
 const result = await pool.query(
 `INSERT INTO assignment_submissions (assignment_id, student_id, content, file_url, file_name)
 VALUES ($1, $2, $3, $4, $5)
