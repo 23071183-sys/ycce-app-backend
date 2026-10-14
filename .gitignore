@@ -3,3 +3,14 @@ node_modules/
 temp/
 *.log
 .DS_Store
+
+# Locally-stored uploads (Cloudinary fallback)
+uploads/
+
+# Backup files (may contain credentials)
+*.bak
+*.bak.*
+
+# Claude Code / claude-flow session state
+.claude-flow/
+.claude/

@@ -81,6 +81,9 @@ app.use('/api/results', require('./routes/results'));
 app.use('/api/chat', require('./routes/chat'));
 app.use('/api/admin', require('./routes/admin'));
 
+// Serve locally-stored uploads (used when Cloudinary is unavailable)
+app.use('/uploads', express.static(require('./config/cloudinary').UPLOAD_DIR));
+
 app.get('/', (req, res) => {
   res.json({ message: 'YCCE CT App Backend Running' });
 });
@@ -98,8 +101,11 @@ cron.schedule('0 * * * *', async () => {
 });
 
 app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ error: 'Something went wrong' });
+  // Multer/Cloudinary reject with plain objects, so err.stack is often undefined
+  // and logging it alone prints "undefined", hiding the real cause.
+  console.error('Unhandled error on', req.method, req.originalUrl);
+  console.error(err?.stack || err?.error?.message || err?.message || err);
+  res.status(500).json({ error: err?.error?.message || err?.message || 'Something went wrong' });
 });
 
 const PORT = process.env.PORT || 3000;
