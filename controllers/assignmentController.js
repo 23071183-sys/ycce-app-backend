@@ -15,17 +15,28 @@ res.status(201).json(result.rows[0]);
 res.status(500).json({ error: err.message });
 }
 };
-// Get assignments by subject
+// Get assignments by subject, each carrying the caller's own submission so a
+// student can see what they sent and what it was graded. The join is on the
+// requesting user, so a professor simply gets nulls here.
 exports.getBySubject = async (req, res) => {
 const { subjectId } = req.params;
 try {
 const result = await pool.query(
-`SELECT a.*, u.name as posted_by_name
+`SELECT a.*, u.name as posted_by_name,
+        s.id         AS submission_id,
+        s.file_url   AS submission_file_url,
+        s.file_name  AS submission_file_name,
+        s.content    AS submission_content,
+        s.submitted_at,
+        s.grade,
+        s.feedback
 FROM assignments a
 JOIN users u ON a.posted_by = u.id
+LEFT JOIN assignment_submissions s
+  ON s.assignment_id = a.id AND s.student_id = $2
 WHERE a.subject_id = $1
 ORDER BY a.due_date ASC`,
-[subjectId]
+[subjectId, req.user.userId]
 );
 res.json(result.rows);
 } catch (err) {
