@@ -1,10 +1,44 @@
 const { Resend } = require('resend');
 const nodemailer = require('nodemailer');
 
-// Gmail goes first because it delivers to any address. Resend is only a
-// fallback: its onboarding@resend.dev sender delivers to the Resend account
-// owner and nobody else, so it cannot reach students on its own.
+// Senders are tried in order until one delivers.
+//
+// Brevo goes first: it sends over HTTPS, which hosts that block outbound SMTP
+// (Railway did, Render's free tier appears to) cannot stop, and it delivers to
+// any address from a verified sender without owning a domain.
+// Gmail SMTP is next — it works wherever SMTP is allowed, e.g. locally.
+// Resend is last: its onboarding@resend.dev sender delivers only to the Resend
+// account owner, so it cannot reach students on its own.
 const senders = [];
+
+if (process.env.BREVO_API_KEY) {
+  const senderEmail = process.env.BREVO_SENDER || process.env.EMAIL_USER;
+  senders.push({
+    name: 'brevo',
+    send: async (msg) => {
+      if (!senderEmail) throw new Error('BREVO_SENDER (or EMAIL_USER) is not set');
+      const res = await fetch('https://api.brevo.com/v3/smtp/email', {
+        method: 'POST',
+        headers: {
+          'api-key': process.env.BREVO_API_KEY,
+          'content-type': 'application/json',
+          accept: 'application/json',
+        },
+        body: JSON.stringify({
+          sender: { name: 'YCCE CT App', email: senderEmail },
+          to: [{ email: msg.to }],
+          subject: msg.subject,
+          htmlContent: msg.html,
+        }),
+        signal: AbortSignal.timeout(15000),
+      });
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        throw new Error(`HTTP ${res.status} ${body.slice(0, 200)}`);
+      }
+    },
+  });
+}
 
 if (process.env.EMAIL_USER && process.env.EMAIL_PASS) {
   const gmail = nodemailer.createTransport({
