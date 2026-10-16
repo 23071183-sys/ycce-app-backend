@@ -33,7 +33,10 @@ router.put('/ai', superAdminOnly, async (req, res) => {
 
 // Make one small call with the chosen provider and report how it went.
 router.post('/ai/test', superAdminOnly, async (req, res) => {
-  res.json(await ai.test());
+  // ?tool=quiz|cards|plan runs the real schema of that feature instead of a tiny one.
+  const tools = require('../controllers/studyAiController')._internal;
+  const tool = { quiz: tools.QUIZ_TOOL, cards: tools.CARDS_TOOL, plan: tools.PLAN_TOOL }[req.query.tool] || null;
+  res.json(await ai.test(tool));
 });
 
 module.exports = router;

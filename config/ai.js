@@ -233,17 +233,17 @@ async function callTool({ system, content, tool, model, maxTokens = 8000 }) {
 }
 
 // A tiny forced-tool call against the chosen provider: is it set up and how fast?
-async function test() {
+async function test(tool = null) {
   const provider = await getProvider();
   const started = Date.now();
   try {
     const out = await callTool({
       system: 'Reply using the tool.',
-      content: [{ type: 'text', text: 'Say hello in one word.' }],
-      tool: { name: 'reply', description: 'Send the reply.', input_schema: { type: 'object', properties: { word: { type: 'string' } }, required: ['word'] } },
+      content: [{ type: 'text', text: tool ? 'Topic: binary search trees. Use the tool with a small example.' : 'Say hello in one word.' }],
+      tool: tool || { name: 'reply', description: 'Send the reply.', input_schema: { type: 'object', properties: { word: { type: 'string' } }, required: ['word'] } },
       maxTokens: 200,
     });
-    return { ok: true, provider, model: provider === 'gemini' ? await geminiModel() : MODEL, ms: Date.now() - started, reply: out.word };
+    return { ok: true, provider, model: provider === 'gemini' ? await geminiModel() : MODEL, ms: Date.now() - started, reply: tool ? out : out.word };
   } catch (err) {
     return { ok: false, provider, model: provider === 'gemini' ? await geminiModel().catch(() => null) : MODEL, ms: Date.now() - started, error: err.message, detail: err.detail || null };
   }
