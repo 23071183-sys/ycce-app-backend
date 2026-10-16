@@ -33,3 +33,9 @@ services:
         sync: false
       - key: PUBLIC_BACKEND_URL
         value: https://ycce-app-backend.onrender.com
+      - key: CAMPUS_LAT
+        value: "21.094478"
+      - key: CAMPUS_LNG
+        value: "78.977594"
+      - key: CAMPUS_RADIUS_M
+        value: "400"
