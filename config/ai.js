@@ -24,34 +24,45 @@ class AiUnavailable extends Error {
 
 // ── Provider choice ────────────────────────────────────────────────────────
 
-let providerCache = { value: null, at: 0 };
+// Saved in app_settings 'ai_provider' as { provider, gemini_model }.
+let settingsCache = { value: null, at: 0 };
 
 const defaultProvider = () =>
   PROVIDERS.includes(process.env.AI_PROVIDER) ? process.env.AI_PROVIDER : hasKey.gemini() ? 'gemini' : 'anthropic';
 
-async function getProvider() {
-  if (providerCache.value && Date.now() - providerCache.at < 30_000) return providerCache.value;
-  let value = defaultProvider();
+async function getSettings() {
+  if (settingsCache.value && Date.now() - settingsCache.at < 30_000) return settingsCache.value;
+  let saved = {};
   try {
     const { rows } = await pool.query(`SELECT value FROM app_settings WHERE key = 'ai_provider'`);
-    if (PROVIDERS.includes(rows[0]?.value?.provider)) value = rows[0].value.provider;
+    saved = rows[0]?.value || {};
   } catch (err) {
-    console.warn('Reading AI provider setting failed:', err.message);
+    console.warn('Reading AI settings failed:', err.message);
   }
-  providerCache = { value, at: Date.now() };
+  const value = {
+    provider: PROVIDERS.includes(saved.provider) ? saved.provider : defaultProvider(),
+    gemini_model: typeof saved.gemini_model === 'string' ? saved.gemini_model : null,
+  };
+  settingsCache = { value, at: Date.now() };
   return value;
 }
 
-async function setProvider(provider, userId) {
-  if (!PROVIDERS.includes(provider)) throw Object.assign(new Error('Unknown provider'), { status: 400 });
+const getProvider = async () => (await getSettings()).provider;
+
+// changes: { provider?, gemini_model? } (gemini_model null = automatic)
+async function saveSettings(changes, userId) {
+  const next = { ...(await getSettings()), ...changes };
+  if (!PROVIDERS.includes(next.provider)) throw Object.assign(new Error('Unknown provider'), { status: 400 });
   await pool.query(
     `INSERT INTO app_settings (key, value, updated_by, updated_at) VALUES ('ai_provider', $1, $2, now())
      ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_by = EXCLUDED.updated_by, updated_at = now()`,
-    [{ provider }, userId]
+    [next, userId]
   );
-  providerCache = { value: provider, at: Date.now() };
-  return provider;
+  settingsCache = { value: next, at: Date.now() };
+  return next;
 }
+
+const setProvider = (provider, userId) => saveSettings({ provider }, userId).then(s => s.provider);
 
 // ── Anthropic ──────────────────────────────────────────────────────────────
 
@@ -92,37 +103,50 @@ let geminiList = { models: null, at: 0 };
 let geminiWorking = null; // the last model that answered
 const noThinkingConfig = new Set(); // models that rejected thinkingConfig
 
-// Models to try, best first: GEMINI_MODEL if set; otherwise every stable
-// "gemini-X-flash" this key can use, newest first, then the lite and "latest"
-// aliases. A model can be listed yet not served (e.g. too new for the free
-// tier), so callers fall through the list.
+// Every Gemini model this key can use for generateContent, sorted: Google's
+// stable "gemini-flash-latest" alias, then gemini-X-flash newest first, then
+// the lite models. Cached for 6 hours.
+async function geminiAvailable() {
+  if (geminiList.models && Date.now() - geminiList.at < 6 * 3600_000) return geminiList.models;
+  let models = [];
+  try {
+    const res = await fetch(`${GEMINI}/models?pageSize=1000`, {
+      headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY },
+      signal: AbortSignal.timeout(15000),
+    });
+    const data = await res.json();
+    const ids = (data.models || [])
+      .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
+      .map(m => m.name.replace(/^models\//, ''));
+    const ver = (re) => ids.map(id => ({ id, v: re.exec(id)?.[1] })).filter(m => m.v)
+      .sort((a, b) => parseFloat(b.v) - parseFloat(a.v)).map(m => m.id);
+    models = [
+      ...ids.filter(id => id === 'gemini-flash-latest'),
+      ...ver(/^gemini-(\d+(?:\.\d+)?)-flash$/),
+      ...ver(/^gemini-(\d+(?:\.\d+)?)-flash-lite$/),
+    ];
+  } catch (err) {
+    console.warn('Listing Gemini models failed:', err.message);
+  }
+  geminiList = { models: models.length ? models : ['gemini-flash-latest'], at: models.length ? Date.now() : 0 };
+  return geminiList.models;
+}
+
+// A model that just timed out or was overloaded sits out for a while, so the
+// next request doesn't wait on it again.
+const COOLDOWN_MS = 10 * 60_000;
+const coolingUntil = new Map();
+const cooling = (m) => (coolingUntil.get(m) || 0) > Date.now();
+
+// Models to try, best first: GEMINI_MODEL env, else the admin's pinned model,
+// else the last one that worked, then the rest; models cooling down go last.
 async function geminiCandidates() {
   if (process.env.GEMINI_MODEL) return [process.env.GEMINI_MODEL];
-  if (!geminiList.models || Date.now() - geminiList.at > 6 * 3600_000) {
-    let models = [];
-    try {
-      const res = await fetch(`${GEMINI}/models?pageSize=1000`, {
-        headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY },
-        signal: AbortSignal.timeout(15000),
-      });
-      const data = await res.json();
-      const ids = (data.models || [])
-        .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
-        .map(m => m.name.replace(/^models\//, ''));
-      const ver = (re) => ids.map(id => ({ id, v: re.exec(id)?.[1] })).filter(m => m.v)
-        .sort((a, b) => parseFloat(b.v) - parseFloat(a.v)).map(m => m.id);
-      models = [
-        ...ver(/^gemini-(\d+(?:\.\d+)?)-flash$/),
-        ...ids.filter(id => id === 'gemini-flash-latest'),
-        ...ver(/^gemini-(\d+(?:\.\d+)?)-flash-lite$/),
-      ];
-    } catch (err) {
-      console.warn('Listing Gemini models failed:', err.message);
-    }
-    geminiList = { models: models.length ? models : ['gemini-flash-latest'], at: models.length ? Date.now() : 0 };
-  }
-  const list = geminiList.models;
-  return geminiWorking && list.includes(geminiWorking) ? [geminiWorking, ...list.filter(m => m !== geminiWorking)] : list;
+  const list = await geminiAvailable();
+  const { gemini_model: pinned } = await getSettings();
+  const first = [pinned, geminiWorking].filter(m => m && list.includes(m));
+  const ordered = [...new Set([...first, ...list])];
+  return [...ordered.filter(m => !cooling(m)), ...ordered.filter(cooling)];
 }
 
 const geminiModel = async () => (await geminiCandidates())[0];
@@ -217,9 +241,11 @@ async function geminiTool({ system, content, tool, maxTokens }) {
     try {
       const out = await geminiRequest(model, body);
       geminiWorking = model;
+      coolingUntil.delete(model);
       return out;
     } catch (err) {
       lastErr = err;
+      if (err.retryable) coolingUntil.set(model, Date.now() + COOLDOWN_MS);
       tried.push(err.detail || `${model}: ${err.message}`);
       if (!err.retryable) break;
     }
@@ -261,12 +287,20 @@ async function test(tool = null) {
 }
 
 async function status() {
-  const provider = await getProvider();
+  const { provider, gemini_model } = await getSettings();
+  const geminiOn = hasKey.gemini();
   return {
     provider,
     providers: {
       anthropic: { configured: hasKey.anthropic(), model: MODEL },
-      gemini: { configured: hasKey.gemini(), model: hasKey.gemini() ? await geminiModel() : null },
+      gemini: {
+        configured: geminiOn,
+        model: geminiOn ? await geminiModel() : null,
+        pinned: process.env.GEMINI_MODEL || gemini_model,
+        pinned_by_env: Boolean(process.env.GEMINI_MODEL),
+        models: geminiOn ? await geminiAvailable() : [],
+        cooling: geminiOn ? (await geminiAvailable()).filter(cooling) : [],
+      },
     },
   };
 }
@@ -292,5 +326,5 @@ async function fileBlock(url, name = '') {
 
 module.exports = {
   MODEL, FAST_MODEL, PROVIDERS, configured, callTool, fileBlock, setClient, AiUnavailable,
-  getProvider, setProvider, status, test, _internal: { toGeminiSchema, toGeminiParts, geminiModel },
+  getProvider, setProvider, saveSettings, status, test, geminiAvailable, _internal: { toGeminiSchema, toGeminiParts, geminiModel },
 };
