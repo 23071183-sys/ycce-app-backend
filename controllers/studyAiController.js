@@ -415,4 +415,4 @@ exports.getPlan = async (req, res) => {
   }
 };
 
-exports._internal = { sm2, weightFor, material, plannerInput };
+exports._internal = { sm2, weightFor, material, plannerInput, QUIZ_TOOL, CARDS_TOOL, PLAN_TOOL };
