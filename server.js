@@ -82,6 +82,8 @@ const app = express();
 app.use(helmet());
 app.use(cors());
 app.use(morgan('dev'));
+// Razorpay signs the raw body, so the webhook must read it before express.json().
+app.post('/api/fees/webhook', express.raw({ type: '*/*', limit: '1mb' }), require('./controllers/feePayments').webhook);
 app.use(express.json());
 
 app.use('/api/auth', require('./routes/auth'));
@@ -99,6 +101,7 @@ app.use('/api/chat', require('./routes/chat'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/messages', require('./routes/messages'));
+app.use('/api/fees', require('./routes/fees'));
 
 // Serve locally-stored uploads (used when Cloudinary is unavailable)
 app.use('/uploads', express.static(require('./config/cloudinary').UPLOAD_DIR));
@@ -118,6 +121,12 @@ cron.schedule('0 * * * *', async () => {
   const { checkAndSendDeadlineNotifications } = require('./controllers/assignmentController');
   await checkAndSendDeadlineNotifications();
 });
+
+// Every 15 minutes: settle fee payments the Razorpay webhook missed
+cron.schedule('*/15 * * * *', () => require('./controllers/feePayments').reconcilePending());
+
+// 09:00 IST daily: late fees and fee reminders
+cron.schedule('0 9 * * *', () => require('./controllers/feeController').dailyFeeJobs(), { timezone: 'Asia/Kolkata' });
 
 app.use((err, req, res, next) => {
   // Multer/Cloudinary reject with plain objects, so err.stack is often undefined

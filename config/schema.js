@@ -89,6 +89,8 @@ const FEATURES = [
         UNIQUE (structure_id, student_id)
       );
       CREATE INDEX IF NOT EXISTS idx_fee_invoices_student ON fee_invoices(student_id);
+      ALTER TABLE fee_invoices ADD COLUMN IF NOT EXISTS late_fee_applied BOOLEAN NOT NULL DEFAULT false;
+      ALTER TABLE fee_invoices ADD COLUMN IF NOT EXISTS waive_note TEXT;
       CREATE SEQUENCE IF NOT EXISTS fee_receipt_seq;
       CREATE TABLE IF NOT EXISTS fee_payments (
         id SERIAL PRIMARY KEY,
