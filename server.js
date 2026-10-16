@@ -69,6 +69,7 @@ const pool = require('./config/database');
           CHECK (re_mse_for IS NULL OR re_mse_for IN ('mse1','mse2'));
       EXCEPTION WHEN duplicate_object THEN NULL; END $$;
     `);
+    await require('./config/schema').migrateFeatures(client);
   } catch (e) {
     console.error('Auto-migrate error:', e.message);
   } finally {
@@ -96,6 +97,7 @@ app.use('/api/fest', require('./routes/fest'));
 app.use('/api/results', require('./routes/results'));
 app.use('/api/chat', require('./routes/chat'));
 app.use('/api/admin', require('./routes/admin'));
+app.use('/api/dashboard', require('./routes/dashboard'));
 
 // Serve locally-stored uploads (used when Cloudinary is unavailable)
 app.use('/uploads', express.static(require('./config/cloudinary').UPLOAD_DIR));
@@ -119,6 +121,14 @@ cron.schedule('0 * * * *', async () => {
 app.use((err, req, res, next) => {
   // Multer/Cloudinary reject with plain objects, so err.stack is often undefined
   // and logging it alone prints "undefined", hiding the real cause.
+  // Upload problems are the client's to fix, not server faults: report them as
+  // such so the app can show the real reason.
+  if (err?.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ error: 'That file is too large' });
+  }
+  if (err?.status >= 400 && err?.status < 500) {
+    return res.status(err.status).json({ error: err.message });
+  }
   console.error('Unhandled error on', req.method, req.originalUrl);
   console.error(err?.stack || err?.error?.message || err?.message || err);
   res.status(500).json({ error: err?.error?.message || err?.message || 'Something went wrong' });
