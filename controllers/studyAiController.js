@@ -51,7 +51,7 @@ async function material(subjectId) {
     notes.length ? '## Professor notes\n' + notes.map(n =>
       `### ${n.title}${n.unit ? ` (Unit ${n.unit})` : ''}\n${(n.content || '').slice(0, 6000)}`).join('\n\n') : '',
   ].filter(Boolean).join('\n\n');
-  return { hash, text, empty: !questions.length && !notes.some(n => n.content || n.title) };
+  return { hash, text, hasPapers: questions.length > 0, empty: !questions.length && !notes.some(n => n.content || n.title) };
 }
 
 const sourceBlock = (subject, text) => ({
@@ -120,6 +120,8 @@ exports.getQuiz = async (req, res) => {
     const questions = (out.questions || []).filter(q =>
       q?.question && Array.isArray(q.options) && q.options.length === 4 && Number.isInteger(q.answer) && q.answer >= 0 && q.answer < 4);
     if (questions.length < 3) throw new Error('The quiz came back incomplete. Try again.');
+    // Without any past papers the model can't know what came from one.
+    if (!src.hasPapers) questions.forEach(q => { q.from_past_paper = false; });
     const { rows: [quiz] } = await pool.query(
       'INSERT INTO quizzes (subject_id, questions, source_hash) VALUES ($1, $2, $3) RETURNING *',
       [subjectId, JSON.stringify(questions), src.hash]
