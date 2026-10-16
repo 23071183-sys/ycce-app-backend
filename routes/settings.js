@@ -16,15 +16,27 @@ router.get('/ai', adminOnly, async (req, res) => {
   }
 });
 
+// Body: { provider?, gemini_model? } — gemini_model null means automatic.
 router.put('/ai', superAdminOnly, async (req, res) => {
-  const provider = req.body?.provider;
-  if (!ai.PROVIDERS.includes(provider)) return res.status(400).json({ error: 'provider must be anthropic or gemini' });
+  const { provider, gemini_model } = req.body || {};
+  const changes = {};
   try {
     const st = await ai.status();
-    if (!st.providers[provider].configured) {
-      return res.status(409).json({ error: `${provider === 'gemini' ? 'GEMINI_API_KEY' : 'ANTHROPIC_API_KEY'} is not set on the server` });
+    if (provider !== undefined) {
+      if (!ai.PROVIDERS.includes(provider)) return res.status(400).json({ error: 'provider must be anthropic or gemini' });
+      if (!st.providers[provider].configured) {
+        return res.status(409).json({ error: `${provider === 'gemini' ? 'GEMINI_API_KEY' : 'ANTHROPIC_API_KEY'} is not set on the server` });
+      }
+      changes.provider = provider;
     }
-    await ai.setProvider(provider, req.user.userId);
+    if (gemini_model !== undefined) {
+      if (gemini_model !== null && !(await ai.geminiAvailable()).includes(gemini_model)) {
+        return res.status(400).json({ error: 'That Gemini model is not available for this key' });
+      }
+      changes.gemini_model = gemini_model;
+    }
+    if (!Object.keys(changes).length) return res.status(400).json({ error: 'Nothing to change' });
+    await ai.saveSettings(changes, req.user.userId);
     res.json(await ai.status());
   } catch (err) {
     res.status(err.status || 500).json({ error: err.message });
