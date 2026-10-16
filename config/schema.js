@@ -284,6 +284,18 @@ const FEATURES = [
     `,
   },
   {
+    // Small app-wide switches admins can flip without a redeploy (e.g. AI provider).
+    name: 'app-settings',
+    sql: `
+      CREATE TABLE IF NOT EXISTS app_settings (
+        key VARCHAR(60) PRIMARY KEY,
+        value JSONB NOT NULL,
+        updated_by INT REFERENCES users(id),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+    `,
+  },
+  {
     name: 'badges',
     sql: `
       CREATE TABLE IF NOT EXISTS user_badges (

@@ -39,3 +39,5 @@ services:
         value: "78.977594"
       - key: CAMPUS_RADIUS_M
         value: "400"
+      - key: GEMINI_API_KEY
+        sync: false
