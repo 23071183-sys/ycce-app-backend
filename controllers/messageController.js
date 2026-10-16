@@ -119,7 +119,7 @@ exports.listConversations = async (req, res) => {
   const me = req.user.userId;
   try {
     const { rows } = await pool.query(
-      `SELECT c.id, c.kind, c.subject_id, c.last_message_at, c.last_message_preview,
+      `SELECT c.id, c.kind, c.subject_id, c.last_message_at, c.last_message_preview, p.muted,
               json_build_object('id', o.id, 'name', o.name, 'role', o.role, 'avatar_url', o.avatar_url,
                                 'year', o.year, 'roll_number', o.roll_number) AS other,
               (SELECT COUNT(*)::int FROM messages m
