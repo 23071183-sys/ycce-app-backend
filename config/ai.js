@@ -90,6 +90,7 @@ async function anthropicTool({ system, content, tool, model, maxTokens }) {
 const GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
 let geminiList = { models: null, at: 0 };
 let geminiWorking = null; // the last model that answered
+const noThinkingConfig = new Set(); // models that rejected thinkingConfig
 
 // Models to try, best first: GEMINI_MODEL if set; otherwise every stable
 // "gemini-X-flash" this key can use, newest first, then the lite and "latest"
@@ -156,14 +157,20 @@ const toGeminiParts = (content) => content.map(b => {
 });
 
 // One request to one model. Throws with .retryable when another model might work.
-async function geminiRequest(model, body) {
+async function geminiRequest(model, baseBody) {
+  // Gemini 3+ models think before answering; "low" is plenty for writing
+  // quizzes and keeps a request well under a minute.
+  const thinking = /^gemini-([3-9]|\d{2,})/.test(model) && !noThinkingConfig.has(model);
+  const body = thinking
+    ? { ...baseBody, generationConfig: { ...baseBody.generationConfig, thinkingConfig: { thinkingLevel: 'low' } } }
+    : baseBody;
   let res;
   try {
     res = await fetch(`${GEMINI}/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(90000),
+      signal: AbortSignal.timeout(75000),
     });
   } catch (err) {
     const timeout = err?.name === 'TimeoutError' || err?.name === 'AbortError';
@@ -176,6 +183,10 @@ async function geminiRequest(model, body) {
   if (!res.ok) {
     const msg = data?.error?.message || `HTTP ${res.status}`;
     const detail = `${model}: ${res.status} ${msg}`.slice(0, 400);
+    if (thinking && res.status === 400 && /thinking/i.test(msg)) {
+      noThinkingConfig.add(model);
+      return geminiRequest(model, baseBody);
+    }
     if (res.status === 401 || res.status === 403 || /api key not valid|invalid api key/i.test(msg)) {
       throw Object.assign(new AiUnavailable('The Gemini key is invalid.'), { detail });
     }
@@ -202,7 +213,7 @@ async function geminiTool({ system, content, tool, maxTokens }) {
   };
   const tried = [];
   let lastErr;
-  for (const model of (await geminiCandidates()).slice(0, 4)) {
+  for (const model of (await geminiCandidates()).slice(0, 2)) {
     try {
       const out = await geminiRequest(model, body);
       geminiWorking = model;
