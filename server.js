@@ -53,6 +53,22 @@ const pool = require('./config/database');
       ALTER TABLE users ADD COLUMN IF NOT EXISTS can_post_general BOOLEAN DEFAULT false;
     `);
     await client.query(`UPDATE users SET status = 'approved' WHERE status IS NULL`);
+    // Marks are entered per component. RE-MSE is sat by a student who missed
+    // MSE 1 or MSE 2 and fills that slot; re_mse_for records which one.
+    await client.query(`
+      ALTER TABLE results ADD COLUMN IF NOT EXISTS mse1_marks numeric;
+      ALTER TABLE results ADD COLUMN IF NOT EXISTS mse2_marks numeric;
+      ALTER TABLE results ADD COLUMN IF NOT EXISTS ta_marks numeric;
+      ALTER TABLE results ADD COLUMN IF NOT EXISTS ese_marks numeric;
+      ALTER TABLE results ADD COLUMN IF NOT EXISTS re_mse_marks numeric;
+      ALTER TABLE results ADD COLUMN IF NOT EXISTS re_mse_for VARCHAR(4);
+    `);
+    await client.query(`
+      DO $$ BEGIN
+        ALTER TABLE results ADD CONSTRAINT results_re_mse_for_check
+          CHECK (re_mse_for IS NULL OR re_mse_for IN ('mse1','mse2'));
+      EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+    `);
   } catch (e) {
     console.error('Auto-migrate error:', e.message);
   } finally {

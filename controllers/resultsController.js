@@ -8,10 +8,19 @@ const COMPONENTS = [
   { key: 'ta_marks',   label: 'TA',    max: 20 },
   { key: 'ese_marks',  label: 'ESE',   max: 50 },
 ];
-const INTERNAL_KEYS = ['mse1_marks', 'mse2_marks', 'ta_marks'];
 const MAX_TOTAL = COMPONENTS.reduce((sum, c) => sum + c.max, 0);
 
+// A student who misses MSE 1 or MSE 2 sits RE-MSE, and that score fills the
+// missed slot. It is not a fifth component: the paper still totals 100.
+const RE_MSE = {
+  key: 're_mse_marks',
+  label: 'RE-MSE',
+  max: 15,
+  replaces: { mse1: 'mse1_marks', mse2: 'mse2_marks' },
+};
+
 exports.COMPONENTS = COMPONENTS;
+exports.RE_MSE = RE_MSE;
 
 // Reject anything that isn't a mark between 0 and that component's ceiling.
 // Returns the parsed number, or null for a blank, which means "not entered yet".
@@ -35,6 +44,7 @@ exports.getMarksSheet = async (req, res) => {
     const students = await pool.query(
       `SELECT u.id AS student_id, u.name AS student_name, u.roll_number,
               r.mse1_marks, r.mse2_marks, r.ta_marks, r.ese_marks,
+              r.re_mse_marks, r.re_mse_for,
               r.internal_marks, r.external_marks, r.total_marks, r.grade, r.result
        FROM users u
        LEFT JOIN results r
@@ -47,6 +57,7 @@ exports.getMarksSheet = async (req, res) => {
       subject: subject.rows[0],
       semester: Number(semester),
       components: COMPONENTS,
+      re_mse: { key: RE_MSE.key, label: RE_MSE.label, max: RE_MSE.max, replaces: Object.keys(RE_MSE.replaces) },
       max_total: MAX_TOTAL,
       students: students.rows,
     });
@@ -74,16 +85,39 @@ exports.upsertBulk = async (req, res) => {
       }
       marks[comp.key] = value;
     }
+
+    const reMse = parseMark(rec[RE_MSE.key], RE_MSE.max);
+    if (reMse === undefined) {
+      return res.status(400).json({ error: `${RE_MSE.label} for ${who} must be between 0 and ${RE_MSE.max}` });
+    }
+    let reMseFor = null;
+    if (reMse !== null) {
+      reMseFor = rec.re_mse_for;
+      const slot = RE_MSE.replaces[reMseFor];
+      if (!slot) {
+        return res.status(400).json({ error: `Say which MSE the ${RE_MSE.label} for ${who} replaces (mse1 or mse2)` });
+      }
+      // RE-MSE is for a missed exam, so the slot it fills must be empty.
+      if (marks[slot] !== null) {
+        const missed = COMPONENTS.find(c => c.key === slot).label;
+        return res.status(400).json({ error: `${who} has both ${missed} and a ${RE_MSE.label} for it — clear one` });
+      }
+    }
+
     // A row where every component is blank has not been marked yet; skip it
     // rather than storing a spurious zero.
-    if (COMPONENTS.every(c => marks[c.key] === null)) continue;
+    if (reMse === null && COMPONENTS.every(c => marks[c.key] === null)) continue;
 
-    const internal = INTERNAL_KEYS.reduce((sum, k) => sum + (marks[k] || 0), 0);
+    const mse1 = reMseFor === 'mse1' ? reMse : marks.mse1_marks;
+    const mse2 = reMseFor === 'mse2' ? reMse : marks.mse2_marks;
+    const internal = (mse1 || 0) + (mse2 || 0) + (marks.ta_marks || 0);
     const external = marks.ese_marks || 0;
     const total = internal + external;
     rows.push({
       student_id: rec.student_id,
       ...marks,
+      re_mse_marks: reMse,
+      re_mse_for: reMseFor,
       internal,
       external,
       total,
@@ -98,13 +132,16 @@ exports.upsertBulk = async (req, res) => {
     for (const r of rows) {
       await client.query(
         `INSERT INTO results (student_id, subject_id, semester, mse1_marks, mse2_marks, ta_marks, ese_marks,
+                              re_mse_marks, re_mse_for,
                               internal_marks, external_marks, total_marks, grade, result, academic_year)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
          ON CONFLICT (student_id, subject_id, semester)
          DO UPDATE SET mse1_marks=$4, mse2_marks=$5, ta_marks=$6, ese_marks=$7,
-                       internal_marks=$8, external_marks=$9, total_marks=$10,
-                       grade=$11, result=$12, academic_year=$13`,
+                       re_mse_marks=$8, re_mse_for=$9,
+                       internal_marks=$10, external_marks=$11, total_marks=$12,
+                       grade=$13, result=$14, academic_year=$15`,
         [r.student_id, subject_id, semester, r.mse1_marks, r.mse2_marks, r.ta_marks, r.ese_marks,
+         r.re_mse_marks, r.re_mse_for,
          r.internal, r.external, r.total, r.grade, r.result, academic_year || null]
       );
     }
