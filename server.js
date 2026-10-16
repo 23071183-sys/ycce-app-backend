@@ -102,6 +102,10 @@ app.use('/api/admin', require('./routes/admin'));
 app.use('/api/dashboard', require('./routes/dashboard'));
 app.use('/api/messages', require('./routes/messages'));
 app.use('/api/fees', require('./routes/fees'));
+app.use('/api/placements', require('./routes/placements'));
+app.use('/api/events', require('./routes/events'));
+app.use('/api/calendar', require('./routes/calendar'));
+app.use('/api/progress', require('./routes/progress'));
 
 // Serve locally-stored uploads (used when Cloudinary is unavailable)
 app.use('/uploads', express.static(require('./config/cloudinary').UPLOAD_DIR));
@@ -127,6 +131,9 @@ cron.schedule('*/15 * * * *', () => require('./controllers/feePayments').reconci
 
 // 09:00 IST daily: late fees and fee reminders
 cron.schedule('0 9 * * *', () => require('./controllers/feeController').dailyFeeJobs(), { timezone: 'Asia/Kolkata' });
+
+// 02:00 IST nightly: award badges
+cron.schedule('0 2 * * *', () => require('./controllers/progressController').nightly(), { timezone: 'Asia/Kolkata' });
 
 app.use((err, req, res, next) => {
   // Multer/Cloudinary reject with plain objects, so err.stack is often undefined

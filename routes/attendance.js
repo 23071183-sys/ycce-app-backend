@@ -12,4 +12,13 @@ router.get('/subject/:subjectId/report', authMiddleware, getSectionReport);
 router.get('/subject/:subjectId/student/:studentId', authMiddleware, getStudentDetail);
 router.get('/overall', authMiddleware, getOverallAttendance);
 
+// QR attendance sessions
+const qr = require('../controllers/qrAttendanceController');
+const { staffOnly } = require('../middleware/roles');
+router.post('/sessions', authMiddleware, staffOnly, qr.start);
+router.post('/sessions/scan', authMiddleware, qr.scan);
+router.get('/sessions/:id', authMiddleware, staffOnly, qr.detail);
+router.get('/sessions/:id/token', authMiddleware, staffOnly, qr.token);
+router.post('/sessions/:id/close', authMiddleware, staffOnly, qr.close);
+
 module.exports = router;
