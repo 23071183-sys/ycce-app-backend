@@ -574,6 +574,10 @@ async function executeAdminTool(name, input, callerRole) {
       if (forbidden.some(f => lower.includes(f))) {
         return { error: 'That query type is blocked for safety. Use INSERT/UPDATE/DELETE for data fixes.' };
       }
+      // Direct messages are private between their participants.
+      if (/\b(messages|conversations|conversation_participants)\b/.test(lower)) {
+        return { error: 'Direct messages are private and cannot be queried.' };
+      }
       const r = await pool.query(input.query, input.params || []);
       return { rows: r.rows, rowCount: r.rowCount };
     }
