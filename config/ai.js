@@ -88,32 +88,43 @@ async function anthropicTool({ system, content, tool, model, maxTokens }) {
 // ── Gemini (REST, no SDK) ──────────────────────────────────────────────────
 
 const GEMINI = 'https://generativelanguage.googleapis.com/v1beta';
-let geminiModelCache = { name: null, at: 0 };
+let geminiList = { models: null, at: 0 };
+let geminiWorking = null; // the last model that answered
 
-// Use GEMINI_MODEL if set; otherwise ask Google which models this key has and
-// take the newest stable "gemini-X-flash" (no lite/preview/experimental).
-async function geminiModel() {
-  if (process.env.GEMINI_MODEL) return process.env.GEMINI_MODEL;
-  if (geminiModelCache.name && Date.now() - geminiModelCache.at < 6 * 3600_000) return geminiModelCache.name;
-  let pick = null;
-  try {
-    const res = await fetch(`${GEMINI}/models?pageSize=1000`, {
-      headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY },
-      signal: AbortSignal.timeout(15000),
-    });
-    const data = await res.json();
-    const flash = (data.models || [])
-      .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
-      .map(m => ({ id: m.name.replace(/^models\//, ''), v: /^gemini-(\d+(?:\.\d+)?)-flash$/.exec(m.name.replace(/^models\//, ''))?.[1] }))
-      .filter(m => m.v)
-      .sort((a, b) => parseFloat(b.v) - parseFloat(a.v));
-    pick = flash[0]?.id || (data.models || []).find(m => m.name === 'models/gemini-flash-latest') && 'gemini-flash-latest';
-  } catch (err) {
-    console.warn('Listing Gemini models failed:', err.message);
+// Models to try, best first: GEMINI_MODEL if set; otherwise every stable
+// "gemini-X-flash" this key can use, newest first, then the lite and "latest"
+// aliases. A model can be listed yet not served (e.g. too new for the free
+// tier), so callers fall through the list.
+async function geminiCandidates() {
+  if (process.env.GEMINI_MODEL) return [process.env.GEMINI_MODEL];
+  if (!geminiList.models || Date.now() - geminiList.at > 6 * 3600_000) {
+    let models = [];
+    try {
+      const res = await fetch(`${GEMINI}/models?pageSize=1000`, {
+        headers: { 'x-goog-api-key': process.env.GEMINI_API_KEY },
+        signal: AbortSignal.timeout(15000),
+      });
+      const data = await res.json();
+      const ids = (data.models || [])
+        .filter(m => (m.supportedGenerationMethods || []).includes('generateContent'))
+        .map(m => m.name.replace(/^models\//, ''));
+      const ver = (re) => ids.map(id => ({ id, v: re.exec(id)?.[1] })).filter(m => m.v)
+        .sort((a, b) => parseFloat(b.v) - parseFloat(a.v)).map(m => m.id);
+      models = [
+        ...ver(/^gemini-(\d+(?:\.\d+)?)-flash$/),
+        ...ids.filter(id => id === 'gemini-flash-latest'),
+        ...ver(/^gemini-(\d+(?:\.\d+)?)-flash-lite$/),
+      ];
+    } catch (err) {
+      console.warn('Listing Gemini models failed:', err.message);
+    }
+    geminiList = { models: models.length ? models : ['gemini-flash-latest'], at: models.length ? Date.now() : 0 };
   }
-  geminiModelCache = { name: pick || 'gemini-flash-latest', at: pick ? Date.now() : 0 };
-  return geminiModelCache.name;
+  const list = geminiList.models;
+  return geminiWorking && list.includes(geminiWorking) ? [geminiWorking, ...list.filter(m => m !== geminiWorking)] : list;
 }
+
+const geminiModel = async () => (await geminiCandidates())[0];
 
 // Gemini takes an OpenAPI-style subset of JSON Schema: upper-case types,
 // `nullable` instead of ['x','null'], and no unknown keywords.
@@ -144,44 +155,67 @@ const toGeminiParts = (content) => content.map(b => {
   throw new Error(`Unsupported content for Gemini: ${b.type}`);
 });
 
-async function geminiTool({ system, content, tool, maxTokens }) {
-  const model = await geminiModel();
+// One request to one model. Throws with .retryable when another model might work.
+async function geminiRequest(model, body) {
   let res;
   try {
     res = await fetch(`${GEMINI}/models/${encodeURIComponent(model)}:generateContent`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'x-goog-api-key': process.env.GEMINI_API_KEY },
-      body: JSON.stringify({
-        systemInstruction: { parts: [{ text: system }] },
-        contents: [{ role: 'user', parts: toGeminiParts(content) }],
-        tools: [{ functionDeclarations: [{ name: tool.name, description: tool.description, parameters: toGeminiSchema(tool.input_schema) }] }],
-        toolConfig: { functionCallingConfig: { mode: 'ANY', allowedFunctionNames: [tool.name] } },
-        generationConfig: { maxOutputTokens: Math.max(maxTokens, 8192), temperature: 0.4 },
-      }),
-      signal: AbortSignal.timeout(120000),
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(90000),
     });
   } catch (err) {
-    if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
-      throw new AiUnavailable('Gemini took too long to answer. Try again in a minute.');
-    }
-    throw new AiUnavailable(`Could not reach Gemini (${err?.cause?.code || err?.message}).`);
+    const timeout = err?.name === 'TimeoutError' || err?.name === 'AbortError';
+    throw Object.assign(
+      new AiUnavailable(timeout ? 'Gemini took too long to answer. Try again in a minute.' : 'Could not reach Gemini. Try again in a minute.'),
+      { retryable: timeout, detail: `${model}: ${timeout ? 'timeout' : err?.cause?.code || err?.message}` }
+    );
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
-    const msg = data?.error?.message || `Gemini responded ${res.status}`;
-    if (res.status === 429) throw new AiUnavailable('Gemini\'s free limit is used up for now. Try again later.');
-    if (res.status === 401 || res.status === 403 || /api key/i.test(msg)) throw new AiUnavailable('The Gemini key is invalid.');
-    if (res.status === 404) geminiModelCache = { name: null, at: 0 }; // model gone: re-pick next time
-    if (res.status >= 500) throw new AiUnavailable('Gemini is having trouble. Try again in a minute.');
-    throw new Error(msg);
+    const msg = data?.error?.message || `HTTP ${res.status}`;
+    const detail = `${model}: ${res.status} ${msg}`.slice(0, 400);
+    if (res.status === 401 || res.status === 403 || /api key not valid|invalid api key/i.test(msg)) {
+      throw Object.assign(new AiUnavailable('The Gemini key is invalid.'), { detail });
+    }
+    if (res.status === 429) throw Object.assign(new AiUnavailable('Gemini\'s free limit is used up for now. Try again later.'), { retryable: true, detail });
+    if (res.status === 404 || res.status >= 500) throw Object.assign(new AiUnavailable('Gemini is having trouble. Try again in a minute.'), { retryable: true, detail });
+    throw Object.assign(new Error(msg), { retryable: res.status === 400, detail });
   }
   const cand = data.candidates?.[0];
   const call = cand?.content?.parts?.find(p => p.functionCall)?.functionCall;
   if (!call) {
     if (cand?.finishReason === 'SAFETY') throw new Error('Gemini declined to answer this one.');
-    throw new Error('The AI gave no structured answer. Try again.');
+    throw Object.assign(new Error('The AI gave no structured answer. Try again.'), { detail: `${model}: finish ${cand?.finishReason}` });
   }
   return call.args || {};
+}
+
+async function geminiTool({ system, content, tool, maxTokens }) {
+  const body = {
+    systemInstruction: { parts: [{ text: system }] },
+    contents: [{ role: 'user', parts: toGeminiParts(content) }],
+    tools: [{ functionDeclarations: [{ name: tool.name, description: tool.description, parameters: toGeminiSchema(tool.input_schema) }] }],
+    toolConfig: { functionCallingConfig: { mode: 'ANY', allowedFunctionNames: [tool.name] } },
+    generationConfig: { maxOutputTokens: Math.max(maxTokens, 8192), temperature: 0.4 },
+  };
+  const tried = [];
+  let lastErr;
+  for (const model of (await geminiCandidates()).slice(0, 4)) {
+    try {
+      const out = await geminiRequest(model, body);
+      geminiWorking = model;
+      return out;
+    } catch (err) {
+      lastErr = err;
+      tried.push(err.detail || `${model}: ${err.message}`);
+      if (!err.retryable) break;
+    }
+  }
+  console.warn('Gemini failed:', tried.join(' | '));
+  lastErr.detail = tried.join(' | ');
+  throw lastErr;
 }
 
 // ── Shared entry point ─────────────────────────────────────────────────────
@@ -211,7 +245,7 @@ async function test() {
     });
     return { ok: true, provider, model: provider === 'gemini' ? await geminiModel() : MODEL, ms: Date.now() - started, reply: out.word };
   } catch (err) {
-    return { ok: false, provider, model: provider === 'gemini' ? await geminiModel().catch(() => null) : MODEL, ms: Date.now() - started, error: err.message };
+    return { ok: false, provider, model: provider === 'gemini' ? await geminiModel().catch(() => null) : MODEL, ms: Date.now() - started, error: err.message, detail: err.detail || null };
   }
 }
 
