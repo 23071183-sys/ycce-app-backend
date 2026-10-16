@@ -7,6 +7,12 @@ const ai = require('../config/ai');
 // Generated sets are cached per subject and only rebuilt when the material
 // changes or a student asks for a fresh one (rate limited).
 
+// Error reply for the AI endpoints; admins also get the provider's raw detail.
+const aiError = (req, res, err) => res.status(err.status || 500).json({
+  error: err.message,
+  ...(['admin', 'super_admin'].includes(req.user?.role) && err.detail ? { detail: err.detail } : {}),
+});
+
 const DAILY_LIMIT = 5;
 const usage = new Map(); // `${userId}:${kind}:${YYYY-MM-DD}` -> count
 const overLimit = (userId, kind) => {
@@ -120,7 +126,7 @@ exports.getQuiz = async (req, res) => {
     );
     res.json(publicQuiz(quiz));
   } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
+    aiError(req, res, err);
   }
 };
 
@@ -200,7 +206,7 @@ exports.generateCards = async (req, res) => {
     }
     res.status(201).json({ created: cards.length });
   } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
+    aiError(req, res, err);
   }
 };
 
@@ -400,7 +406,7 @@ exports.generatePlan = async (req, res) => {
     );
     res.status(201).json(saved);
   } catch (err) {
-    res.status(err.status || 500).json({ error: err.message });
+    aiError(req, res, err);
   }
 };
 
