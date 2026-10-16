@@ -25,3 +25,11 @@ services:
         sync: false
       - key: EMAIL_PASS
         sync: false
+      - key: RAZORPAY_KEY_ID
+        sync: false
+      - key: RAZORPAY_KEY_SECRET
+        sync: false
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
+      - key: PUBLIC_BACKEND_URL
+        value: https://ycce-app-backend.onrender.com
