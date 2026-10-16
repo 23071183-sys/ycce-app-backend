@@ -170,6 +170,13 @@ const FEATURES = [
     `,
   },
   {
+    // Marking attendance upserts ON CONFLICT (student_id, subject_id, date),
+    // which needs this index; without it every mark failed.
+    name: 'attendance-unique',
+    sql: `CREATE UNIQUE INDEX IF NOT EXISTS attendance_student_subject_date
+            ON attendance (student_id, subject_id, date);`,
+  },
+  {
     name: 'qr-attendance',
     sql: `
       CREATE TABLE IF NOT EXISTS attendance_sessions (

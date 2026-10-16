@@ -56,12 +56,14 @@ res.status(500).json({ error: err.message });
 };
 // Create Compufest event
 exports.createEvent = async (req, res) => {
-const { title, description, event_date, venue, registration_link, banner_url } = req.body;
+const { title, description, event_date, venue, registration_link, banner_url, capacity } = req.body;
+// Optional seat limit for registrations; blank means unlimited.
+const cap = Number(capacity) > 0 ? Math.floor(Number(capacity)) : null;
 try {
 const result = await pool.query(
-`INSERT INTO compufest_events (title, description, event_date, venue, registration_link, banner_url)
-VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-[title, description, event_date, venue, registration_link, banner_url]
+`INSERT INTO compufest_events (title, description, event_date, venue, registration_link, banner_url, capacity)
+VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
+[title, description, event_date, venue, registration_link, banner_url, cap]
 );
 res.status(201).json(result.rows[0]);
 } catch (err) {

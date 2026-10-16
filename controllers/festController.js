@@ -12,12 +12,14 @@ res.status(500).json({ error: err.message });
 };
 // Create Yash fest event
 exports.createEvent = async (req, res) => {
-const { title, description, event_date, venue, registration_link, banner_url, category } = req.body;
+const { title, description, event_date, venue, registration_link, banner_url, category, capacity } = req.body;
+// Optional seat limit for registrations; blank means unlimited.
+const cap = Number(capacity) > 0 ? Math.floor(Number(capacity)) : null;
 try {
 const result = await pool.query(
-`INSERT INTO fest_events (title, description, event_date, venue, registration_link, banner_url, category)
-VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING *`,
-[title, description, event_date, venue, registration_link, banner_url, category]
+`INSERT INTO fest_events (title, description, event_date, venue, registration_link, banner_url, category, capacity)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING *`,
+[title, description, event_date, venue, registration_link, banner_url, category, cap]
 );
 res.status(201).json(result.rows[0]);
 } catch (err) {
