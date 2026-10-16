@@ -107,6 +107,7 @@ app.use('/api/events', require('./routes/events'));
 app.use('/api/calendar', require('./routes/calendar'));
 app.use('/api/progress', require('./routes/progress'));
 app.use('/api/study', require('./routes/study'));
+app.use('/api/settings', require('./routes/settings'));
 
 // Serve locally-stored uploads (used when Cloudinary is unavailable)
 app.use('/uploads', express.static(require('./config/cloudinary').UPLOAD_DIR));
