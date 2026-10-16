@@ -161,7 +161,10 @@ async function geminiTool({ system, content, tool, maxTokens }) {
       signal: AbortSignal.timeout(120000),
     });
   } catch (err) {
-    throw new AiUnavailable('Could not reach Gemini. Try again in a minute.');
+    if (err?.name === 'TimeoutError' || err?.name === 'AbortError') {
+      throw new AiUnavailable('Gemini took too long to answer. Try again in a minute.');
+    }
+    throw new AiUnavailable(`Could not reach Gemini (${err?.cause?.code || err?.message}).`);
   }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) {
@@ -193,6 +196,23 @@ async function callTool({ system, content, tool, model, maxTokens = 8000 }) {
   return provider === 'gemini'
     ? geminiTool({ system, content, tool, maxTokens })
     : anthropicTool({ system, content, tool, model, maxTokens });
+}
+
+// A tiny forced-tool call against the chosen provider: is it set up and how fast?
+async function test() {
+  const provider = await getProvider();
+  const started = Date.now();
+  try {
+    const out = await callTool({
+      system: 'Reply using the tool.',
+      content: [{ type: 'text', text: 'Say hello in one word.' }],
+      tool: { name: 'reply', description: 'Send the reply.', input_schema: { type: 'object', properties: { word: { type: 'string' } }, required: ['word'] } },
+      maxTokens: 200,
+    });
+    return { ok: true, provider, model: provider === 'gemini' ? await geminiModel() : MODEL, ms: Date.now() - started, reply: out.word };
+  } catch (err) {
+    return { ok: false, provider, model: provider === 'gemini' ? await geminiModel().catch(() => null) : MODEL, ms: Date.now() - started, error: err.message };
+  }
 }
 
 async function status() {
@@ -227,5 +247,5 @@ async function fileBlock(url, name = '') {
 
 module.exports = {
   MODEL, FAST_MODEL, PROVIDERS, configured, callTool, fileBlock, setClient, AiUnavailable,
-  getProvider, setProvider, status, _internal: { toGeminiSchema, toGeminiParts, geminiModel },
+  getProvider, setProvider, status, test, _internal: { toGeminiSchema, toGeminiParts, geminiModel },
 };
