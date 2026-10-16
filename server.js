@@ -98,6 +98,7 @@ app.use('/api/results', require('./routes/results'));
 app.use('/api/chat', require('./routes/chat'));
 app.use('/api/admin', require('./routes/admin'));
 app.use('/api/dashboard', require('./routes/dashboard'));
+app.use('/api/messages', require('./routes/messages'));
 
 // Serve locally-stored uploads (used when Cloudinary is unavailable)
 app.use('/uploads', express.static(require('./config/cloudinary').UPLOAD_DIR));
