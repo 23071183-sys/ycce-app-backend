@@ -31,4 +31,9 @@ router.put('/ai', superAdminOnly, async (req, res) => {
   }
 });
 
+// Make one small call with the chosen provider and report how it went.
+router.post('/ai/test', superAdminOnly, async (req, res) => {
+  res.json(await ai.test());
+});
+
 module.exports = router;
