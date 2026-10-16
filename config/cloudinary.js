@@ -13,21 +13,6 @@ cloudinary.config({
 const UPLOAD_DIR = path.join(__dirname, '..', 'uploads');
 fs.mkdirSync(UPLOAD_DIR, { recursive: true });
 
-const cloudStorage = new CloudinaryStorage({
-  cloudinary,
-  params: async (req, file) => ({
-    folder: 'ycce-app',
-    resource_type: 'raw',
-    public_id: `${Date.now()}-${file.originalname.replace(/\s+/g, '_')}`,
-    format: undefined,
-  }),
-});
-
-const diskStorage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
-  filename: (req, file, cb) => cb(null, `${Date.now()}-${file.originalname.replace(/\s+/g, '_')}`),
-});
-
 // Start on disk so uploads always work, then switch to Cloudinary only once its
 // credentials are confirmed valid — invalid keys otherwise fail every upload.
 let cloudinaryUsable = false;
@@ -49,29 +34,64 @@ const toPublicUrl = (req, info) => ({
   path: `${req.protocol}://${req.get('host')}/uploads/${info.filename}`,
 });
 
-// Choose storage per request so the choice reflects the ping result.
-const storage = {
-  _handleFile(req, file, cb) {
-    const useDisk = (e, info) => (e ? cb(e) : cb(null, toPublicUrl(req, info)));
-    if (!cloudinaryUsable) return diskStorage._handleFile(req, file, useDisk);
-    return cloudStorage._handleFile(req, file, (err, info) => {
-      if (err) {
-        // Credentials went stale mid-run; fall back rather than lose the upload.
-        cloudinaryUsable = false;
-        return diskStorage._handleFile(req, file, useDisk);
-      }
-      return cb(null, info);
-    });
-  },
-  _removeFile(req, file, cb) {
-    const active = cloudinaryUsable ? cloudStorage : diskStorage;
-    return active._removeFile(req, file, cb);
-  },
+const safeName = (file) => `${Date.now()}-${file.originalname.replace(/\s+/g, '_')}`;
+
+const diskStorage = multer.diskStorage({
+  destination: (req, file, cb) => cb(null, UPLOAD_DIR),
+  filename: (req, file, cb) => cb(null, safeName(file)),
+});
+
+// Storage that uses Cloudinary when its credentials work and the local disk
+// otherwise. The choice is made per request so it reflects the ping result.
+const makeStorage = (cloudParams) => {
+  const cloudStorage = new CloudinaryStorage({ cloudinary, params: cloudParams });
+  return {
+    _handleFile(req, file, cb) {
+      const useDisk = (e, info) => (e ? cb(e) : cb(null, toPublicUrl(req, info)));
+      if (!cloudinaryUsable) return diskStorage._handleFile(req, file, useDisk);
+      return cloudStorage._handleFile(req, file, (err, info) => {
+        if (err) {
+          // Credentials went stale mid-run; fall back rather than lose the upload.
+          cloudinaryUsable = false;
+          return diskStorage._handleFile(req, file, useDisk);
+        }
+        return cb(null, info);
+      });
+    },
+    _removeFile(req, file, cb) {
+      const active = cloudinaryUsable ? cloudStorage : diskStorage;
+      return active._removeFile(req, file, cb);
+    },
+  };
 };
 
+// Notes, assignments and papers: any file, kept as-is.
 const upload = multer({
-  storage,
+  storage: makeStorage(async (req, file) => ({
+    folder: 'ycce-app',
+    resource_type: 'raw',
+    public_id: safeName(file),
+    format: undefined,
+  })),
   limits: { fileSize: 20 * 1024 * 1024 }, // 20MB
 });
 
-module.exports = { cloudinary, upload, UPLOAD_DIR };
+// Profile photos: images only, cropped square around the face so every avatar
+// is the same shape and small enough to load quickly.
+const IMAGE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'image/heic', 'image/heif'];
+const imageUpload = multer({
+  storage: makeStorage(async () => ({
+    folder: 'ycce-app/avatars',
+    resource_type: 'image',
+    transformation: [{ width: 512, height: 512, crop: 'fill', gravity: 'face' }],
+  })),
+  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+  fileFilter: (req, file, cb) => {
+    if (IMAGE_TYPES.includes(file.mimetype)) return cb(null, true);
+    const err = new Error('Upload a JPG, PNG, WebP or HEIC image');
+    err.status = 400;
+    cb(err);
+  },
+});
+
+module.exports = { cloudinary, upload, imageUpload, UPLOAD_DIR };

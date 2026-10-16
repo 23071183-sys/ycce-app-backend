@@ -54,25 +54,98 @@ exports.searchUsers = async (req, res) => {
 };
 
 // Update own profile
-exports.updateProfile = async (req, res) => {
-  const { name, phone, year, roll_number } = req.body;
+// Fields a user may change about themselves. Year and roll number are not
+// among them: fee invoices and who a student may message are derived from
+// year, so only an admin may change it (via the admin user tools).
+const PROFILE_COLUMNS = 'id, name, email, role, year, semester, roll_number, department, designation, phone, bio, avatar_url, notification_prefs, status';
+
+exports.getMe = async (req, res) => {
   try {
-    const result = await pool.query(
-      `UPDATE users SET
-        name = COALESCE($1, name),
-        year = COALESCE($2, year),
-        roll_number = COALESCE($3, roll_number)
-       WHERE id = $4
-       RETURNING id, name, email, role, year, roll_number, department`,
-      [name, year, roll_number, req.user.userId]
-    );
-    res.json(result.rows[0]);
+    const { rows } = await pool.query(`SELECT ${PROFILE_COLUMNS} FROM users WHERE id = $1`, [req.user.userId]);
+    if (rows.length === 0) return res.status(404).json({ error: 'User not found' });
+    res.json(rows[0]);
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
 };
 
-// Get all faculty with their subjects
+exports.updateProfile = async (req, res) => {
+  const { name, phone, bio } = req.body;
+  if (name !== undefined && (typeof name !== 'string' || name.trim().length < 2 || name.trim().length > 100)) {
+    return res.status(400).json({ error: 'Name must be 2 to 100 characters' });
+  }
+  if (phone !== undefined && phone !== null && phone !== '' && !/^\+?[0-9 -]{7,20}$/.test(String(phone))) {
+    return res.status(400).json({ error: 'Enter a valid phone number' });
+  }
+  if (bio !== undefined && bio !== null && String(bio).length > 500) {
+    return res.status(400).json({ error: 'Bio must be under 500 characters' });
+  }
+  try {
+    const { rows } = await pool.query(
+      `UPDATE users SET
+         name = COALESCE($1, name),
+         phone = CASE WHEN $2::boolean THEN $3 ELSE phone END,
+         bio = CASE WHEN $4::boolean THEN $5 ELSE bio END
+       WHERE id = $6
+       RETURNING ${PROFILE_COLUMNS}`,
+      [
+        name !== undefined ? name.trim() : null,
+        phone !== undefined, phone ? String(phone).trim() : null,
+        bio !== undefined, bio ? String(bio).trim() : null,
+        req.user.userId,
+      ]
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.updatePhoto = async (req, res) => {
+  if (!req.file) return res.status(400).json({ error: 'Choose a photo to upload' });
+  try {
+    const { rows } = await pool.query(
+      `UPDATE users SET avatar_url = $1 WHERE id = $2 RETURNING ${PROFILE_COLUMNS}`,
+      [req.file.path, req.user.userId]
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+exports.removePhoto = async (req, res) => {
+  try {
+    const { rows } = await pool.query(
+      `UPDATE users SET avatar_url = NULL WHERE id = $1 RETURNING ${PROFILE_COLUMNS}`,
+      [req.user.userId]
+    );
+    res.json(rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
+const PREF_KEYS = ['announcements', 'lectures', 'deadlines', 'messages', 'fees', 'placements', 'events'];
+
+exports.updateNotificationPrefs = async (req, res) => {
+  const body = req.body || {};
+  const unknown = Object.keys(body).filter(k => !PREF_KEYS.includes(k));
+  if (unknown.length) return res.status(400).json({ error: `Unknown preference: ${unknown.join(', ')}` });
+  const bad = Object.entries(body).filter(([, v]) => typeof v !== 'boolean');
+  if (bad.length) return res.status(400).json({ error: 'Preferences must be true or false' });
+  try {
+    const { rows } = await pool.query(
+      `UPDATE users SET notification_prefs = COALESCE(notification_prefs, '{}'::jsonb) || $1::jsonb
+       WHERE id = $2 RETURNING notification_prefs`,
+      [JSON.stringify(body), req.user.userId]
+    );
+    res.json(rows[0].notification_prefs);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+};
+
 exports.getFaculty = async (req, res) => {
   try {
     const result = await pool.query(
