@@ -104,7 +104,7 @@ const TOOLS = [
 async function runTool(userId, name, input, saved) {
   if (name === 'remember') {
     const r = await addMemory(userId, input?.fact);
-    if (r.saved) saved.push(r.content);
+    if (r.saved || r.already) saved.push(r.content);
     return r;
   }
   if (name === 'forget') {
