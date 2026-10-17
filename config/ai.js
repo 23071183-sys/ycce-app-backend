@@ -219,30 +219,24 @@ async function geminiRequest(model, baseBody) {
     throw Object.assign(new Error(msg), { retryable: res.status === 400, detail });
   }
   const cand = data.candidates?.[0];
-  const call = cand?.content?.parts?.find(p => p.functionCall)?.functionCall;
-  if (!call) {
+  if (!cand?.content?.parts?.length) {
     if (cand?.finishReason === 'SAFETY') throw new Error('Gemini declined to answer this one.');
-    throw Object.assign(new Error('The AI gave no structured answer. Try again.'), { detail: `${model}: finish ${cand?.finishReason}` });
+    throw Object.assign(new Error('The AI gave an empty answer. Try again.'), { detail: `${model}: finish ${cand?.finishReason}` });
   }
-  return call.args || {};
+  return cand;
 }
 
-async function geminiTool({ system, content, tool, maxTokens }) {
-  const body = {
-    systemInstruction: { parts: [{ text: system }] },
-    contents: [{ role: 'user', parts: toGeminiParts(content) }],
-    tools: [{ functionDeclarations: [{ name: tool.name, description: tool.description, parameters: toGeminiSchema(tool.input_schema) }] }],
-    toolConfig: { functionCallingConfig: { mode: 'ANY', allowedFunctionNames: [tool.name] } },
-    generationConfig: { maxOutputTokens: Math.max(maxTokens, 8192), temperature: 0.4 },
-  };
+// Send one request, falling through to the next model when one is down.
+// Returns the first candidate.
+async function geminiGenerate(body) {
   const tried = [];
   let lastErr;
   for (const model of (await geminiCandidates()).slice(0, 2)) {
     try {
-      const out = await geminiRequest(model, body);
+      const cand = await geminiRequest(model, body);
       geminiWorking = model;
       coolingUntil.delete(model);
-      return out;
+      return cand;
     } catch (err) {
       lastErr = err;
       if (err.retryable) coolingUntil.set(model, Date.now() + COOLDOWN_MS);
@@ -253,6 +247,108 @@ async function geminiTool({ system, content, tool, maxTokens }) {
   console.warn('Gemini failed:', tried.join(' | '));
   lastErr.detail = tried.join(' | ');
   throw lastErr;
+}
+
+async function geminiTool({ system, content, tool, maxTokens }) {
+  const cand = await geminiGenerate({
+    systemInstruction: { parts: [{ text: system }] },
+    contents: [{ role: 'user', parts: toGeminiParts(content) }],
+    tools: [{ functionDeclarations: [{ name: tool.name, description: tool.description, parameters: toGeminiSchema(tool.input_schema) }] }],
+    toolConfig: { functionCallingConfig: { mode: 'ANY', allowedFunctionNames: [tool.name] } },
+    generationConfig: { maxOutputTokens: Math.max(maxTokens, 8192), temperature: 0.4 },
+  });
+  const call = cand.content.parts.find(p => p.functionCall)?.functionCall;
+  if (!call) throw new Error('The AI gave no structured answer. Try again.');
+  return call.args || {};
+}
+
+// ── Multi-turn chat with tools (the chatbots) ──────────────────────────────
+// Conversations are kept in Anthropic's message format; for Gemini they are
+// converted each turn, and the reply is converted back, so the chat loop in
+// chatController works the same with either provider.
+
+const declaration = (t) => {
+  const params = toGeminiSchema(t.input_schema || { type: 'object' });
+  // Gemini rejects an OBJECT with no properties; such tools take no arguments.
+  const empty = !params.properties || !Object.keys(params.properties).length;
+  return { name: t.name, description: t.description || t.name, ...(empty ? {} : { parameters: params }) };
+};
+
+function toGeminiContents(messages) {
+  const names = {}; // tool_use id -> tool name, for the matching results
+  const contents = [];
+  for (const m of messages) {
+    const blocks = typeof m.content === 'string' ? [{ type: 'text', text: m.content }] : (m.content || []);
+    const parts = [];
+    for (const b of blocks) {
+      if (b.type === 'text' && b.text?.trim()) {
+        parts.push(b._sig ? { text: b.text, thoughtSignature: b._sig } : { text: b.text });
+      } else if (b.type === 'tool_use') {
+        names[b.id] = b.name;
+        parts.push({ functionCall: { name: b.name, args: b.input || {} }, ...(b._sig ? { thoughtSignature: b._sig } : {}) });
+      } else if (b.type === 'tool_result') {
+        let result = b.content;
+        try { result = JSON.parse(b.content); } catch { /* keep the string */ }
+        parts.push({ functionResponse: { name: names[b.tool_use_id] || 'tool', response: { result } } });
+      }
+    }
+    if (parts.length) contents.push({ role: m.role === 'assistant' ? 'model' : 'user', parts });
+  }
+  return contents;
+}
+
+async function geminiChat({ system, messages, tools, maxTokens }) {
+  const cand = await geminiGenerate({
+    systemInstruction: { parts: [{ text: system }] },
+    contents: toGeminiContents(messages),
+    ...(tools?.length ? {
+      tools: [{ functionDeclarations: tools.map(declaration) }],
+      toolConfig: { functionCallingConfig: { mode: 'AUTO' } },
+    } : {}),
+    generationConfig: { maxOutputTokens: Math.max(maxTokens, 4096), temperature: 0.5 },
+  });
+  let n = 0;
+  const content = [];
+  for (const p of cand.content.parts) {
+    if (p.thought) continue; // the model's private reasoning
+    if (p.functionCall) {
+      // Gemini 3 needs each call's thought signature sent back with it next turn.
+      content.push({ type: 'tool_use', id: `gemini_${Date.now()}_${n++}`, name: p.functionCall.name,
+        input: p.functionCall.args || {}, ...(p.thoughtSignature ? { _sig: p.thoughtSignature } : {}) });
+    } else if (p.text) {
+      content.push({ type: 'text', text: p.text, ...(p.thoughtSignature ? { _sig: p.thoughtSignature } : {}) });
+    }
+  }
+  return { content, stop_reason: content.some(b => b.type === 'tool_use') ? 'tool_use' : 'end_turn' };
+}
+
+async function anthropicChat({ system, messages, tools, maxTokens }) {
+  try {
+    return await getClient().messages.create({
+      model: FAST_MODEL,
+      max_tokens: maxTokens,
+      system,
+      messages,
+      ...(tools?.length ? { tools } : {}),
+    });
+  } catch (err) {
+    const msg = String(err?.message || err);
+    if (/credit balance/i.test(msg)) throw new AiUnavailable('Anthropic credits have run out. An admin can switch to Gemini.');
+    if (err?.status === 401) throw new AiUnavailable('The Anthropic key is invalid.');
+    if (err?.status === 429 || err?.status === 529 || /overloaded/i.test(msg)) throw new AiUnavailable('The AI is busy. Try again in a minute.');
+    throw err;
+  }
+}
+
+// One assistant turn: returns { content: [text/tool_use blocks], stop_reason }.
+async function chatTurn({ system, messages, tools, maxTokens = 4096 }) {
+  const provider = await getProvider();
+  if (!hasKey[provider]()) {
+    throw new AiUnavailable(`${provider === 'gemini' ? 'Gemini' : 'Anthropic'} is not set up on the server.`);
+  }
+  return provider === 'gemini'
+    ? geminiChat({ system, messages, tools, maxTokens })
+    : anthropicChat({ system, messages, tools, maxTokens });
 }
 
 // ── Shared entry point ─────────────────────────────────────────────────────
@@ -325,6 +421,6 @@ async function fileBlock(url, name = '') {
 }
 
 module.exports = {
-  MODEL, FAST_MODEL, PROVIDERS, configured, callTool, fileBlock, setClient, AiUnavailable,
-  getProvider, setProvider, saveSettings, status, test, geminiAvailable, _internal: { toGeminiSchema, toGeminiParts, geminiModel },
+  MODEL, FAST_MODEL, PROVIDERS, configured, callTool, chatTurn, fileBlock, setClient, AiUnavailable,
+  getProvider, setProvider, saveSettings, status, test, geminiAvailable, _internal: { toGeminiSchema, toGeminiParts, geminiModel, toGeminiContents, declaration },
 };
