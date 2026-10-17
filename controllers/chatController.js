@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 
 const ai = require('../config/ai');
+const collegeSite = require('../config/collegeSite');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 
@@ -19,7 +20,8 @@ RULES:
 - Highlight warnings: attendance < 75%, overdue assignments, failed subjects.
 - For questions about the department's faculty (HOD, deans, professors, who teaches what, emails, qualifications), call get_faculty and answer from it. The HOD is whoever's designation says "HOD".
 - Never answer facts about YCCE people or the college from memory. If no tool gives the answer, say you don't have that information rather than guessing.
-- For questions unrelated to academics or YCCE, politely redirect.`;
+- For questions unrelated to academics or YCCE, politely redirect.
+${collegeSite.PROMPT_RULES}`;
 
 const ADMIN_SYSTEM = `You are a developer assistant for the YCCE app backend. You are talking to the system admin who has full access.
 
@@ -50,7 +52,8 @@ RULES:
 - For DB issues not covered by data tools, use run_db_query.
 - Be precise and concise — use tables or bullet lists for structured data.
 - Never delete files. Never modify .env.
-- After writing a file fix, remind the admin to restart the server.`;
+- After writing a file fix, remind the admin to restart the server.
+${collegeSite.PROMPT_RULES}`;
 
 // ─── Student tools ─────────────────────────────────────────────────────────────
 // Shared by students and professors: the department's faculty directory.
@@ -62,6 +65,7 @@ const FACULTY_TOOL = {
 
 const STUDENT_TOOLS = [
   FACULTY_TOOL,
+  ...collegeSite.TOOLS,
   {
     name: 'get_my_profile',
     description: "Get the logged-in student's full profile: name, email, roll number, year, semester, department.",
@@ -281,6 +285,7 @@ const ADMIN_TOOLS = [
       required: [],
     },
   },
+  ...collegeSite.TOOLS,
 ];
 
 // ─── Student tool execution ────────────────────────────────────────────────────
@@ -776,7 +781,8 @@ async function runAgentLoop(system, tools, initialMessages, executeTool) {
     const toolResults = [];
 
     for (const tu of toolUseBlocks) {
-      const result = await executeTool(tu.name, tu.input);
+      // The official-website tools are the same for every chat.
+      const result = (await collegeSite.runTool(tu.name, tu.input)) ?? await executeTool(tu.name, tu.input);
       toolResults.push({
         type: 'tool_result',
         tool_use_id: tu.id,
@@ -814,6 +820,7 @@ const DASHBOARD_TOOLS = [
   ADMIN_TOOLS.find(t => t.name === 'get_notes'),
   ADMIN_TOOLS.find(t => t.name === 'get_all_users'),
   ADMIN_TOOLS.find(t => t.name === 'get_db_tables'),
+  ...collegeSite.TOOLS,
 ].filter(Boolean);
 
 const DASHBOARD_SYSTEM = `You are a helpful assistant for the YCCE (Yashwantrao Chavan College of Engineering) admin portal. You help professors and admins view college data.
@@ -826,7 +833,8 @@ RULES:
 - Keep responses concise and well-formatted. Use tables or bullet lists for data.
 - For faculty questions (HOD, deans, who teaches what) use get_professors; the HOD is whoever's designation says "HOD".
 - Never answer facts about YCCE people or the college from memory; if no tool gives the answer, say so instead of guessing.
-- For questions unrelated to YCCE college data, politely redirect.`;
+- For questions unrelated to YCCE college data, politely redirect.
+${collegeSite.PROMPT_RULES}`;
 
 exports.dashboardChat = async (req, res) => {
   const { messages } = req.body;
@@ -867,7 +875,7 @@ exports.chat = async (req, res) => {
     return res.status(403).json({ error: 'Admins must use /api/chat/admin' });
   }
 
-  const tools = userRole === 'student' ? STUDENT_TOOLS : [FACULTY_TOOL];
+  const tools = userRole === 'student' ? STUDENT_TOOLS : [FACULTY_TOOL, ...collegeSite.TOOLS];
 
   try {
     let pdfUrl = null;
