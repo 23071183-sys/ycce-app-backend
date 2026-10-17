@@ -284,6 +284,30 @@ const FEATURES = [
     `,
   },
   {
+    // The in-app assistant's saved conversation and the facts a user asked it
+    // to remember. Private to that user.
+    name: 'chat-memory',
+    sql: `
+      CREATE TABLE IF NOT EXISTS chat_messages (
+        id BIGSERIAL PRIMARY KEY,
+        user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        role VARCHAR(10) NOT NULL CHECK (role IN ('user','assistant')),
+        content TEXT NOT NULL,
+        pdf_url TEXT,
+        memory_note TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_messages_user ON chat_messages(user_id, id);
+      CREATE TABLE IF NOT EXISTS chat_memories (
+        id SERIAL PRIMARY KEY,
+        user_id INT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        content VARCHAR(300) NOT NULL,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_memories_user ON chat_memories(user_id);
+    `,
+  },
+  {
     // Small app-wide switches admins can flip without a redeploy (e.g. AI provider).
     name: 'app-settings',
     sql: `

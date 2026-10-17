@@ -5,6 +5,7 @@ const path = require('path');
 
 const ai = require('../config/ai');
 const collegeSite = require('../config/collegeSite');
+const chatMemory = require('../config/chatMemory');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 
@@ -603,7 +604,7 @@ async function executeAdminTool(name, input, callerRole) {
         return { error: 'That query type is blocked for safety. Use INSERT/UPDATE/DELETE for data fixes.' };
       }
       // Direct messages are private between their participants.
-      if (/\b(messages|conversations|conversation_participants)\b/.test(lower)) {
+      if (/\b(messages|conversations|conversation_participants|chat_messages|chat_memories)\b/.test(lower)) {
         return { error: 'Direct messages are private and cannot be queried.' };
       }
       const r = await pool.query(input.query, input.params || []);
@@ -861,34 +862,114 @@ exports.dashboardChat = async (req, res) => {
 };
 
 // ─── Student / Professor chat (no file access) ─────────────────────────────────
+// History rows as model messages: starts with the user and never has two
+// turns from the same side in a row (some providers reject that).
+function toModelMessages(rows) {
+  const out = [];
+  for (const r of rows) {
+    if (!out.length && r.role !== 'user') continue;
+    const last = out[out.length - 1];
+    if (last && last.role === r.role) last.content += `\n\n${r.content}`;
+    else out.push({ role: r.role, content: r.content });
+  }
+  return out;
+}
+
 exports.chat = async (req, res) => {
-  const { messages } = req.body;
+  const { messages, message } = req.body || {};
   const userId   = req.user.userId;
   const userRole = req.user.role;
-
-  if (!messages || !Array.isArray(messages)) {
-    return res.status(400).json({ error: 'messages array required' });
-  }
 
   // Hard block — file tools never available here, no matter what
   if (['super_admin', 'admin'].includes(userRole)) {
     return res.status(403).json({ error: 'Admins must use /api/chat/admin' });
   }
 
-  const tools = userRole === 'student' ? STUDENT_TOOLS : [FACULTY_TOOL, ...collegeSite.TOOLS];
+  // { message } is the saved conversation with memory; { messages } is the
+  // older stateless form, kept for app builds that haven't updated yet.
+  const persistent = typeof message === 'string';
+  if (persistent ? !message.trim() : !Array.isArray(messages)) {
+    return res.status(400).json({ error: 'message is required' });
+  }
+  if (persistent && message.length > 4000) {
+    return res.status(400).json({ error: 'Message is too long (4000 characters max)' });
+  }
+
+  const baseTools = userRole === 'student' ? STUDENT_TOOLS : [FACULTY_TOOL, ...collegeSite.TOOLS];
 
   try {
     let pdfUrl = null;
+    const saved = [];
+    let system = STUDENT_SYSTEM;
+    let tools = baseTools;
+    let convo = messages;
 
-    const reply = await runAgentLoop(STUDENT_SYSTEM, tools, messages, async (name, input) => {
+    if (persistent) {
+      const [memories, history] = await Promise.all([
+        chatMemory.listMemories(userId),
+        chatMemory.loadHistory(userId),
+      ]);
+      system = STUDENT_SYSTEM + chatMemory.memoryPrompt(memories);
+      tools = [...baseTools, ...chatMemory.TOOLS];
+      convo = toModelMessages([...history, { role: 'user', content: message.trim() }]);
+    }
+
+    const reply = await runAgentLoop(system, tools, convo, async (name, input) => {
+      if (persistent) {
+        const mem = await chatMemory.runTool(userId, name, input, saved);
+        if (mem) return mem;
+      }
       const result = await executeStudentTool(name, input, userId);
       if (name === 'generate_attendance_pdf' && result.url) pdfUrl = result.url;
       return result;
     });
 
-    res.json({ reply, pdf_url: pdfUrl });
+    if (persistent) {
+      await chatMemory.appendMessages(userId, [
+        { role: 'user', content: message.trim() },
+        { role: 'assistant', content: reply, pdf_url: pdfUrl, memory_note: saved.length ? saved.join(' · ') : null },
+      ]);
+    }
+    res.json({ reply, pdf_url: pdfUrl, ...(persistent ? { memory_saved: saved } : {}) });
   } catch (e) {
     aiFailure(res, 'Chat', e);
+  }
+};
+
+// The signed-in user's saved conversation and memories.
+exports.getHistory = async (req, res) => {
+  try {
+    res.json({ messages: await chatMemory.loadHistory(req.user.userId, 100) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+};
+
+exports.clearHistory = async (req, res) => {
+  try {
+    await chatMemory.clearHistory(req.user.userId);
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+};
+
+exports.getMemories = async (req, res) => {
+  try {
+    res.json({ memories: await chatMemory.listMemories(req.user.userId) });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
+  }
+};
+
+exports.deleteMemory = async (req, res) => {
+  try {
+    if (!(await chatMemory.deleteMemory(req.user.userId, req.params.id))) {
+      return res.status(404).json({ error: 'Memory not found' });
+    }
+    res.json({ ok: true });
+  } catch (e) {
+    res.status(500).json({ error: e.message });
   }
 };
 
