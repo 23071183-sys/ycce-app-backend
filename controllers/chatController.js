@@ -1,10 +1,9 @@
-const Anthropic = require('@anthropic-ai/sdk');
 const pool = require('../config/database');
 const PDFDocument = require('pdfkit');
 const fs = require('fs');
 const path = require('path');
 
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+const ai = require('../config/ai');
 
 const PROJECT_ROOT = path.resolve(__dirname, '..');
 
@@ -743,16 +742,11 @@ async function executeAdminTool(name, input, callerRole) {
 // ─── Shared agentic loop ───────────────────────────────────────────────────────
 async function runAgentLoop(system, tools, initialMessages, executeTool) {
   let apiMessages = [...initialMessages];
+  // Uses whichever AI provider the super admin chose (Claude or Gemini).
+  let response = await ai.chatTurn({ system, messages: apiMessages, tools });
 
-  let response = await client.messages.create({
-    model: 'claude-haiku-4-5',
-    max_tokens: 4096,
-    system,
-    messages: apiMessages,
-    ...(tools ? { tools } : {}),
-  });
-
-  while (response.stop_reason === 'tool_use') {
+  // Cap the tool rounds so a confused model can't loop forever.
+  for (let round = 0; response.stop_reason === 'tool_use' && round < 8; round++) {
     const toolUseBlocks = response.content.filter(b => b.type === 'tool_use');
     const toolResults = [];
 
@@ -771,17 +765,18 @@ async function runAgentLoop(system, tools, initialMessages, executeTool) {
       { role: 'user',      content: toolResults },
     ];
 
-    response = await client.messages.create({
-      model: 'claude-haiku-4-5',
-      max_tokens: 4096,
-      system,
-      messages: apiMessages,
-      ...(tools ? { tools } : {}),
-    });
+    response = await ai.chatTurn({ system, messages: apiMessages, tools });
   }
 
-  return response.content.find(b => b.type === 'text')?.text || 'Done.';
+  return response.content.filter(b => b.type === 'text').map(b => b.text).join('\n').trim() || 'Done.';
 }
+
+// AI errors (no credits, quota, provider down) carry a message fit to show.
+const aiFailure = (res, label, e) => {
+  console.error(`${label} error:`, e.message, e.detail || '');
+  if (e.status === 503) return res.status(503).json({ error: e.message });
+  res.status(500).json({ error: 'AI service unavailable' });
+};
 
 // ─── Dashboard tools (read-only data, no files, no DB writes) ─────────────────
 const DASHBOARD_TOOLS = [
@@ -826,9 +821,7 @@ exports.dashboardChat = async (req, res) => {
     });
     res.json({ reply });
   } catch (e) {
-    console.error('Dashboard chat error:', e.message);
-    if (e.message?.includes('credit balance')) return res.status(503).json({ error: 'AI service is temporarily unavailable. Credits depleted.' });
-    res.status(500).json({ error: 'AI service unavailable' });
+    aiFailure(res, 'Dashboard chat', e);
   }
 };
 
@@ -860,9 +853,7 @@ exports.chat = async (req, res) => {
 
     res.json({ reply, pdf_url: pdfUrl });
   } catch (e) {
-    console.error('Chat error:', e.message);
-    if (e.message?.includes('credit balance')) return res.status(503).json({ error: 'AI service is temporarily unavailable. Credits depleted.' });
-    res.status(500).json({ error: 'AI service unavailable' });
+    aiFailure(res, 'Chat', e);
   }
 };
 
@@ -886,9 +877,7 @@ exports.adminChat = async (req, res) => {
 
     res.json({ reply });
   } catch (e) {
-    console.error('Admin chat error:', e.message);
-    if (e.message?.includes('credit balance')) return res.status(503).json({ error: 'AI service is temporarily unavailable. Credits depleted.' });
-    res.status(500).json({ error: 'AI service unavailable' });
+    aiFailure(res, 'Admin chat', e);
   }
 };
 
