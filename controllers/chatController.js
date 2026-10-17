@@ -17,6 +17,8 @@ RULES:
 - If asked to generate a PDF, call generate_attendance_pdf.
 - Keep responses concise and mobile-friendly. Use bullet points for lists.
 - Highlight warnings: attendance < 75%, overdue assignments, failed subjects.
+- For questions about the department's faculty (HOD, deans, professors, who teaches what, emails, qualifications), call get_faculty and answer from it. The HOD is whoever's designation says "HOD".
+- Never answer facts about YCCE people or the college from memory. If no tool gives the answer, say you don't have that information rather than guessing.
 - For questions unrelated to academics or YCCE, politely redirect.`;
 
 const ADMIN_SYSTEM = `You are a developer assistant for the YCCE app backend. You are talking to the system admin who has full access.
@@ -51,7 +53,15 @@ RULES:
 - After writing a file fix, remind the admin to restart the server.`;
 
 // ─── Student tools ─────────────────────────────────────────────────────────────
+// Shared by students and professors: the department's faculty directory.
+const FACULTY_TOOL = {
+  name: 'get_faculty',
+  description: "The Computer Technology department's faculty: name, designation (e.g. HOD & Professor, Dean), qualification, email, experience, courses taught and the subjects they teach in this app. Use for any question about the HOD or other faculty.",
+  input_schema: { type: 'object', properties: {}, required: [] },
+};
+
 const STUDENT_TOOLS = [
+  FACULTY_TOOL,
   {
     name: 'get_my_profile',
     description: "Get the logged-in student's full profile: name, email, roll number, year, semester, department.",
@@ -200,7 +210,7 @@ const ADMIN_TOOLS = [
   },
   {
     name: 'get_professors',
-    description: 'Get all professors with their subjects, subject codes, and year they teach.',
+    description: 'Get all professors with their designation (HOD, Dean, Professor…), qualification, subjects, subject codes and the year they teach.',
     input_schema: { type: 'object', properties: {}, required: [] },
   },
   {
@@ -276,6 +286,20 @@ const ADMIN_TOOLS = [
 // ─── Student tool execution ────────────────────────────────────────────────────
 async function executeStudentTool(name, input, userId) {
   switch (name) {
+
+    case 'get_faculty': {
+      const r = await pool.query(
+        `SELECT u.name, u.designation, u.qualification, u.email, u.teaching_exp, u.industrial_exp,
+                u.courses_taught, u.research_count,
+                COALESCE(json_agg(json_build_object('subject', s.name, 'code', s.code, 'year', s.year))
+                  FILTER (WHERE s.id IS NOT NULL), '[]') AS subjects_in_app
+         FROM users u LEFT JOIN subjects s ON s.professor_id = u.id
+         WHERE u.role = 'professor' AND u.status = 'approved'
+         GROUP BY u.id
+         ORDER BY u.sort_order NULLS LAST, u.name`
+      );
+      return r.rows;
+    }
 
     case 'get_my_profile': {
       const r = await pool.query(
@@ -615,13 +639,14 @@ async function executeAdminTool(name, input, callerRole) {
 
     case 'get_professors': {
       const r = await pool.query(
-        `SELECT u.id, u.name, u.email, u.department,
-                json_agg(json_build_object('subject', s.name, 'code', s.code, 'year', s.year) ORDER BY s.year, s.name) AS subjects
+        `SELECT u.id, u.name, u.email, u.department, u.designation, u.qualification,
+                COALESCE(json_agg(json_build_object('subject', s.name, 'code', s.code, 'year', s.year) ORDER BY s.year, s.name)
+                  FILTER (WHERE s.id IS NOT NULL), '[]') AS subjects
          FROM users u
          LEFT JOIN subjects s ON s.professor_id = u.id
          WHERE u.role = 'professor'
-         GROUP BY u.id, u.name, u.email, u.department
-         ORDER BY u.name`
+         GROUP BY u.id
+         ORDER BY u.sort_order NULLS LAST, u.name`
       );
       return r.rows;
     }
@@ -799,6 +824,8 @@ RULES:
 - Only fetch and display data. Never suggest modifications.
 - You cannot read or write files, run raw SQL, or make changes to any data.
 - Keep responses concise and well-formatted. Use tables or bullet lists for data.
+- For faculty questions (HOD, deans, who teaches what) use get_professors; the HOD is whoever's designation says "HOD".
+- Never answer facts about YCCE people or the college from memory; if no tool gives the answer, say so instead of guessing.
 - For questions unrelated to YCCE college data, politely redirect.`;
 
 exports.dashboardChat = async (req, res) => {
@@ -840,7 +867,7 @@ exports.chat = async (req, res) => {
     return res.status(403).json({ error: 'Admins must use /api/chat/admin' });
   }
 
-  const tools = userRole === 'student' ? STUDENT_TOOLS : undefined;
+  const tools = userRole === 'student' ? STUDENT_TOOLS : [FACULTY_TOOL];
 
   try {
     let pdfUrl = null;
